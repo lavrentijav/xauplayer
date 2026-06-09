@@ -633,16 +633,18 @@ fun FullScreenPlayerContent(
         }
     }
 
-    // Проверяем, скачана ли книга
+    // Отслеживаем статус загрузки (должно быть на верхнем уровне)
+    val downloadProgress by vm.downloadProgress.collectAsState()
+
+    // Проверяем, скачана ли книга (обновляется при завершении/отмене загрузки)
     var isBookDownloaded by remember { mutableStateOf(false) }
-    LaunchedEffect(selectedBook?.id, state.chapters.size) {
+    LaunchedEffect(selectedBook?.id, state.chapters, downloadProgress) {
         isBookDownloaded = if (selectedBook != null && state.chapters.isNotEmpty()) {
             vm.isBookDownloaded(selectedBook.id)
         } else {
             false
         }
     }
-
 
     // Получаем серию, если есть
     var series by remember { mutableStateOf<ru.fire_core.xauplayer.data.local.entities.Series?>(null) }
@@ -653,9 +655,6 @@ fun FullScreenPlayerContent(
             null
         }
     }
-
-    // Отслеживаем статус загрузки (должно быть на верхнем уровне)
-    val downloadProgress by vm.downloadProgress.collectAsState()
 
     // Вычисляем оставшееся время книги с учетом скорости (до конца ВСЕЙ книги)
     val remainingTime = remember(
@@ -773,170 +772,68 @@ fun FullScreenPlayerContent(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Кнопка скачать/удалить (одна кнопка, меняет иконку в зависимости от статуса)
                     if (selectedBook != null) {
-
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    if (isBookDownloaded) {
-                                        vm.deleteBook(selectedBook.id)
-                                        // Обновляем статус после удаления
-                                        kotlinx.coroutines.delay(ru.fire_core.xauplayer.core.config.AppConfig.ANIMATION_DELAY_MS)
-                                        isBookDownloaded = vm.isBookDownloaded(selectedBook.id)
+                        when {
+                            isBookDownloading || isBookQueued -> {
+                                val progressData = remember(downloadProgress, state.chapters, selectedBook.id, selectedBook.totalSizeBytes) {
+                                    if (state.chapters.isEmpty()) {
+                                        Triple(0f, 0L, 0L)
                                     } else {
-                                        vm.downloadBook(selectedBook.id)
-                                        // Обновляем статус после начала загрузки
-                                        kotlinx.coroutines.delay(ru.fire_core.xauplayer.core.config.AppConfig.ANIMATION_DELAY_MS)
-                                        isBookDownloaded = vm.isBookDownloaded(selectedBook.id)
+                                        val totalDownloaded = state.chapters.sumOf { ch ->
+                                            val p = downloadProgress[ch.id]
+                                            when (p?.state) {
+                                                ru.fire_core.xauplayer.download.DownloadState.COMPLETED ->
+                                                    p.totalBytes.takeIf { it > 0 } ?: (ch.fileSizeBytes ?: 0L)
+                                                else -> p?.downloadedBytes ?: 0L
+                                            }
+                                        }
+                                        var totalSize = selectedBook.totalSizeBytes ?: 0L
+                                        if (totalSize == 0L) {
+                                            totalSize = state.chapters.sumOf { ch ->
+                                                downloadProgress[ch.id]?.totalBytes?.takeIf { it > 0 }
+                                                    ?: (ch.fileSizeBytes ?: 0L)
+                                            }
+                                        }
+                                        val progress = if (totalSize > 0) {
+                                            (totalDownloaded.toFloat() / totalSize.toFloat()).coerceIn(0f, 1f)
+                                        } else 0f
+                                        Triple(progress, totalDownloaded, totalSize)
                                     }
                                 }
+                                val (progress, totalDownloaded, totalSize) = progressData
+                                val downloadedMB = (totalDownloaded.toDouble() / ru.fire_core.xauplayer.core.config.AppConfig.BYTES_PER_MB).toInt()
+                                val totalMB = (totalSize.toDouble() / ru.fire_core.xauplayer.core.config.AppConfig.BYTES_PER_MB).toInt()
+                                val label = when {
+                                    isBookDownloading && totalMB > 0 -> "$downloadedMB/$totalMB Мб"
+                                    isBookDownloading -> "Загрузка..."
+                                    totalMB > 0 -> "$totalMB Мб"
+                                    else -> "В очереди"
+                                }
+                                DownloadProgressControl(
+                                    label = label,
+                                    progress = if (isBookDownloading && totalSize > 0) progress else null,
+                                    onCancel = {
+                                        scope.launch { vm.cancelBookDownload(selectedBook.id) }
+                                    },
+                                    labelColor = Color.White,
+                                    ringColor = Color.White,
+                                    iconTint = Color.White,
+                                    ringSize = 36.dp,
+                                    buttonSize = 28.dp
+                                )
                             }
-                        ) {
-                            when {
-                                isBookDownloading -> {
-                                    val progressData = remember(downloadProgress, state.chapters, selectedBook?.id, selectedBook?.totalSizeBytes) {
-                                        // Считаем общий прогресс загрузки книги
-                                        if (state.chapters.isEmpty()) {
-                                            Pair(0f, Pair(0L, 0L))
+                            else -> {
+                                IconButton(
+                                    onClick = {
+                                        if (isBookDownloaded) {
+                                            scope.launch {
+                                                vm.deleteBook(selectedBook.id)
+                                                isBookDownloaded = vm.isBookDownloaded(selectedBook.id)
+                                            }
                                         } else {
-                                            val totalDownloaded = state.chapters.sumOf { ch ->
-                                                val chapterProgress = downloadProgress[ch.id]
-                                                chapterProgress?.downloadedBytes ?: 0L
-                                            }
-                                            // Используем totalSizeBytes из Book, если доступен (из API)
-                                            var totalSize = selectedBook?.totalSizeBytes ?: 0L
-                                            
-                                            // Если totalSizeBytes не доступен, используем сумму totalBytes из прогрессов глав
-                                            if (totalSize == 0L) {
-                                                totalSize = state.chapters.sumOf { ch ->
-                                                    val chapterProgress = downloadProgress[ch.id]
-                                                    chapterProgress?.totalBytes ?: 0L
-                                                }
-                                            }
-                                            
-                                            // Если размер все еще не известен, пробуем использовать fileSizeBytes из глав
-                                            if (totalSize == 0L) {
-                                                totalSize = state.chapters.sumOf { ch ->
-                                                    ch.fileSizeBytes ?: 0L
-                                                }
-                                            }
-                                            
-                                            val progress = if (totalSize > 0) {
-                                                (totalDownloaded.toFloat() / totalSize.toFloat())
-                                            } else {
-                                                0f
-                                            }
-                                            Pair(progress, Pair(totalDownloaded, totalSize))
+                                            vm.downloadBook(selectedBook.id)
                                         }
                                     }
-                                    val progress = progressData.first
-                                    val (totalDownloaded, totalSize) = progressData.second
-                                    val downloadedMB = (totalDownloaded.toDouble() / ru.fire_core.xauplayer.core.config.AppConfig.BYTES_PER_MB).toInt()
-                                    val totalMB = (totalSize.toDouble() / ru.fire_core.xauplayer.core.config.AppConfig.BYTES_PER_MB).toInt()
-                                    
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        // Прогресс в цифрах слева
-                                        Text(
-                                            text = "$downloadedMB/$totalMB Мб",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                        // Круговой прогресс-бар вокруг кнопки отмены
-                                        Box(
-                                            modifier = Modifier.size(32.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            CircularProgressIndicator(
-                                                progress = { progress },
-                                                modifier = Modifier.size(32.dp),
-                                                strokeWidth = 2.5.dp,
-                                                color = Color.White
-                                            )
-                                            IconButton(
-                                                onClick = {
-                                                    scope.launch {
-                                                        vm.cancelBookDownload(selectedBook.id)
-                                                    }
-                                                },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = "Отменить загрузку",
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                isBookQueued -> {
-                                    // Состояние до загрузки: автоподсчёт веса книги при синхронизации
-                                    val totalSize = remember(downloadProgress, state.chapters, selectedBook?.id, selectedBook?.totalSizeBytes) {
-                                        // Используем totalSizeBytes из Book, если доступен (из API)
-                                        selectedBook?.totalSizeBytes ?: run {
-                                            // Если не доступен, используем сумму из прогрессов глав
-                                            var size = state.chapters.sumOf { ch ->
-                                                val chapterProgress = downloadProgress[ch.id]
-                                                chapterProgress?.totalBytes ?: 0L
-                                            }
-                                            // Если размер все еще не известен, пробуем использовать fileSizeBytes из глав
-                                            if (size == 0L) {
-                                                size = state.chapters.sumOf { ch ->
-                                                    ch.fileSizeBytes ?: 0L
-                                                }
-                                            }
-                                            size
-                                        }
-                                    }
-                                    val totalMB = if (totalSize > 0) {
-                                        (totalSize.toDouble() / ru.fire_core.xauplayer.core.config.AppConfig.BYTES_PER_MB).toInt()
-                                    } else {
-                                        0
-                                    }
-                                    
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        if (totalMB > 0) {
-                                            // Показываем размер книги, если он уже подсчитан
-                                            Text(
-                                                text = "$totalMB Мб",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = Color.White.copy(alpha = 0.8f),
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                        } else {
-                                            // Показываем индикатор подсчёта
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(20.dp),
-                                                strokeWidth = 2.dp,
-                                                color = Color.White
-                                            )
-                                        }
-                                        // Кнопка отмены
-                                        IconButton(
-                                            onClick = {
-                                                scope.launch {
-                                                    vm.cancelBookDownload(selectedBook.id)
-                                                }
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Close,
-                                                contentDescription = "Отменить загрузку",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                                else -> {
+                                ) {
                                     Icon(
                                         imageVector = if (isBookDownloaded) Icons.Default.Delete else Icons.Default.Download,
                                         contentDescription = if (isBookDownloaded) "Удалить с устройства" else "Скачать на устройство",
@@ -960,6 +857,15 @@ fun FullScreenPlayerContent(
                             expanded = showMoreMenu,
                             onDismissRequest = { showMoreMenu = false }
                         ) {
+                            if (selectedBook?.seriesId != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Скачать всю серию") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        vm.downloadSeries(selectedBook.seriesId!!)
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Эквалайзер") },
                                 onClick = {
@@ -1838,7 +1744,7 @@ private fun ChapterItemInDialog(
     val isChapterDownloading = chapterProgress?.state == ru.fire_core.xauplayer.download.DownloadState.DOWNLOADING
     val isChapterQueued = chapterProgress?.state == ru.fire_core.xauplayer.download.DownloadState.QUEUED
     
-    LaunchedEffect(chapter.id) {
+    LaunchedEffect(chapter.id, chapterProgress?.state) {
         isChapterDownloaded = vm.isChapterDownloaded(chapter.id)
     }
 
@@ -1880,104 +1786,43 @@ private fun ChapterItemInDialog(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Прогресс-бар загрузки или кнопка скачать/удалить
-                val isChapterQueued = chapterProgress?.state == ru.fire_core.xauplayer.download.DownloadState.QUEUED
-                if (isChapterQueued) {
-                    // Показываем индикатор очереди с кнопкой удаления
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "В очереди",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        CircularProgressIndicator(
-                            progress = { 0f },
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    vm.removeChapterFromQueue(chapter.id)
-                                }
-                            },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Удалить из очереди",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                } else if (isChapterDownloading) {
+                if (!isChapterDownloaded && isChapterQueued) {
+                    DownloadProgressControl(
+                        label = "В очереди",
+                        progress = null,
+                        onCancel = {
+                            scope.launch { vm.removeChapterFromQueue(chapter.id) }
+                        },
+                        ringSize = 32.dp,
+                        buttonSize = 24.dp,
+                        strokeWidth = 2.dp
+                    )
+                } else if (!isChapterDownloaded && isChapterDownloading) {
                     val progress = remember(chapterProgress) {
                         if (chapterProgress != null && chapterProgress.totalBytes > 0) {
                             (chapterProgress.downloadedBytes.toFloat() / chapterProgress.totalBytes.toFloat())
+                                .coerceIn(0f, 1f)
+                        } else null
+                    }
+                    val label = remember(chapterProgress) {
+                        if (chapterProgress != null && chapterProgress.totalBytes > 0) {
+                            val downloadedMB = ru.fire_core.xauplayer.core.config.AppConfig.bytesToMB(chapterProgress.downloadedBytes)
+                            val totalMB = ru.fire_core.xauplayer.core.config.AppConfig.bytesToMB(chapterProgress.totalBytes)
+                            "${String.format("%.1f", downloadedMB)}/${String.format("%.1f", totalMB)} Мб"
                         } else {
-                            0f
+                            "Загрузка..."
                         }
                     }
-                    val downloadedMB = remember(chapterProgress) {
-                        if (chapterProgress != null) {
-                            ru.fire_core.xauplayer.core.config.AppConfig.bytesToMB(chapterProgress.downloadedBytes)
-                        } else {
-                            0.0
-                        }
-                    }
-                    val totalMB = remember(chapterProgress) {
-                        if (chapterProgress != null) {
-                            ru.fire_core.xauplayer.core.config.AppConfig.bytesToMB(chapterProgress.totalBytes)
-                        } else {
-                            0.0
-                        }
-                    }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${String.format("%.1f", downloadedMB)}/${String.format("%.1f", totalMB)} МБ",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(Color.Transparent, CircleShape)
-                        ) {
-                            CircularProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .align(Alignment.Center),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        vm.cancelChapterDownload(chapter.id)
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(20.dp)
-                                    .align(Alignment.Center)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Отменить загрузку",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
+                    DownloadProgressControl(
+                        label = label,
+                        progress = progress,
+                        onCancel = {
+                            scope.launch { vm.cancelChapterDownload(chapter.id) }
+                        },
+                        ringSize = 32.dp,
+                        buttonSize = 24.dp,
+                        strokeWidth = 2.dp
+                    )
                 } else {
                     // Кнопка скачать/удалить (отдельная кнопка, не вызывает переход)
                     IconButton(
@@ -2625,10 +2470,24 @@ private fun SeriesRowModal(
                         )
                     }
                 }
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Свернуть" else "Развернуть"
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = { vm.downloadSeries(seriesWithBooks.series.id) },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "Скачать всю серию"
+                        )
+                    }
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Свернуть" else "Развернуть"
+                    )
+                }
             }
 
             // Книги серии

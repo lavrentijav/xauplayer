@@ -21,6 +21,7 @@ fun PlaybackSettingsDialog(
 ) {
     val autoDownload by viewModel.autoDownload.collectAsState()
     val autoDelete by viewModel.autoDelete.collectAsState()
+    val autoPlayNextSeriesBook by viewModel.autoPlayNextSeriesBook.collectAsState()
     val useSystemMediaPlayer by viewModel.useSystemMediaPlayer.collectAsState()
     val maxDownloadSpeed by viewModel.maxDownloadSpeed.collectAsState()
     var editedMaxDownloadSpeed by remember(maxDownloadSpeed) { 
@@ -86,6 +87,29 @@ fun PlaybackSettingsDialog(
                         onCheckedChange = {
                             scope.launch {
                                 viewModel.setAutoDelete(it)
+                            }
+                        }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Следующая книга в серии")
+                        Text(
+                            "После последней главы переходить к следующей книге с той же скоростью",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = autoPlayNextSeriesBook,
+                        onCheckedChange = {
+                            scope.launch {
+                                viewModel.setAutoPlayNextSeriesBook(it)
                             }
                         }
                     )

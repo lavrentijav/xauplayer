@@ -13,6 +13,7 @@ import okhttp3.Request
 import ru.fire_core.xauplayer.BuildConfig
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import ru.fire_core.xauplayer.data.datastore.SettingsStore
+import ru.fire_core.xauplayer.data.network.ApiUrlBuilder
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -149,6 +150,7 @@ class UpdateManager @Inject constructor(
             )
 
             val updateUrl = settingsStore.updateUrl.first()
+            val apiBaseUrl = settingsStore.baseUrl.first()
             if (updateUrl.isBlank()) {
                 logger.info("UpdateManager", "Update URL not configured")
                 _updateProgress.value = _updateProgress.value.copy(
@@ -158,11 +160,9 @@ class UpdateManager @Inject constructor(
                 return@withContext null
             }
 
-            // Используем API endpoint /version для получения информации о версии
-            // Используем те же параметры, что и для запроса файла: os_type=android&arch={architecture}
-            val baseUrl = updateUrl.replace("/release", "")
+            val versionBaseUrl = ApiUrlBuilder.resolveVersionBaseUrl(updateUrl, apiBaseUrl)
             val arch = getArchitecture()
-            val versionUrl = "$baseUrl/version?os_type=android&arch=$arch"
+            val versionUrl = ApiUrlBuilder.join(versionBaseUrl, "version?os_type=android&arch=$arch")
             logger.info("UpdateManager", "Checking for updates: $versionUrl")
 
             _updateProgress.value = _updateProgress.value.copy(
@@ -237,7 +237,7 @@ class UpdateManager @Inject constructor(
             val serverVersionCode = serverParsed.third
 
             // Формируем URL для скачивания обновления
-            val downloadUrl = "$baseUrl/release?os_type=android&arch=$arch"
+            val downloadUrl = ApiUrlBuilder.join(versionBaseUrl, "release?os_type=android&arch=$arch")
             
             val updateInfo = UpdateInfo(
                 versionCode = serverVersionCode,

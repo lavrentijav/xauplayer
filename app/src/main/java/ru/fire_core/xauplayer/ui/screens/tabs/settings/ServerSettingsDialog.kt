@@ -69,7 +69,7 @@ fun ServerSettingsDialog(
                     label = { Text("Base URL") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    placeholder = { Text("http://192.168.1.16:6543/") }
+                    placeholder = { Text("https://host/api/v1/") }
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))

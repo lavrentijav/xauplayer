@@ -148,35 +148,6 @@ class BooksRepositoryImpl @Inject constructor(
                             }
                         } catch (e: Exception) {
                             logger.warn("BooksRepository", "Failed to sync books from status: $status", e)
-                            // Пробуем использовать старые методы для обратной совместимости
-                            try {
-                                val statusBooks = when (status) {
-                                    "wanted" -> api.getWantedBooks()
-                                    "listening" -> api.getListeningBooks()
-                                    "completed" -> api.getCompletedBooks()
-                                    "dropped" -> api.getDroppedBooks()
-                                    else -> emptyList()
-                                }
-                                val statusMapped = statusBooks.map {
-                                    Book(
-                                        id = it.id,
-                                        title = it.title,
-                                        author = it.author,
-                                        narrator = it.narrator,
-                                        coverUrl = it.cover_url,
-                                        description = it.description,
-                                        seriesId = it.series_id,
-                                        seriesOrder = it.series_order,
-                                        uploadedAt = it.uploaded_at
-                                    )
-                                }
-                                if (statusMapped.isNotEmpty()) {
-                                    db.bookDao().upsertAll(statusMapped)
-                                    logger.info("BooksRepository", "Synced ${statusMapped.size} books from status: $status (fallback)")
-                                }
-                            } catch (e2: Exception) {
-                                logger.warn("BooksRepository", "Failed to sync books from status: $status (fallback)", e2)
-                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -322,7 +293,7 @@ class BooksRepositoryImpl @Inject constructor(
                         id = it.id, 
                         bookId = bookId, 
                         title = it.title, 
-                        duration = (it.duration * 1000).toLong(), // Конвертируем секунды в миллисекунды
+                        duration = ((it.duration ?: 0.0) * 1000).toLong(),
                         chapterOrder = it.order,
                         realOrder = it.real_order,
                         fileSizeBytes = it.file_size_bytes,

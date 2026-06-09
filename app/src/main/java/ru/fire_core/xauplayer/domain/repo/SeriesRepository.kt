@@ -104,51 +104,17 @@ class SeriesRepositoryImpl @Inject constructor(
     }
     
     override suspend fun createSeries(name: String, description: String?, coverUrl: String?): Series? {
-        return try {
-            val created = api.createSeries(
-                ru.fire_core.xauplayer.data.network.SeriesCreateRequest(name, description, coverUrl)
-            )
-            val series = Series(
-                id = created.id,
-                name = created.name,
-                description = created.description,
-                coverUrl = created.cover_url,
-                createdAt = created.created_at
-            )
-            db.seriesDao().upsert(series)
-            series
-        } catch (e: Exception) {
-            null
-        }
+        logger.warn("SeriesRepository", "createSeries is not supported by public API")
+        return null
     }
-    
+
     override suspend fun updateSeries(seriesId: Long, name: String?, description: String?, coverUrl: String?): Series? {
-        return try {
-            val updated = api.updateSeries(
-                seriesId,
-                ru.fire_core.xauplayer.data.network.SeriesUpdateRequest(name, description, coverUrl)
-            )
-            val series = Series(
-                id = updated.id,
-                name = updated.name,
-                description = updated.description,
-                coverUrl = updated.cover_url,
-                createdAt = updated.created_at
-            )
-            db.seriesDao().upsert(series)
-            series
-        } catch (e: Exception) {
-            null
-        }
+        logger.warn("SeriesRepository", "updateSeries is not supported by public API")
+        return null
     }
-    
+
     override suspend fun deleteSeries(seriesId: Long) {
-        try {
-            api.deleteSeries(seriesId)
-            db.seriesDao().delete(seriesId)
-        } catch (e: Exception) {
-            // Игнорируем ошибки сети
-        }
+        logger.warn("SeriesRepository", "deleteSeries is not supported by public API")
     }
 }
 

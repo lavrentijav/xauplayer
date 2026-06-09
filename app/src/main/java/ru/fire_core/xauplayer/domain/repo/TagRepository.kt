@@ -3,9 +3,13 @@ package ru.fire_core.xauplayer.domain.repo
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import ru.fire_core.xauplayer.data.local.AppDatabase
 import ru.fire_core.xauplayer.data.local.entities.Tag
-import ru.fire_core.xauplayer.data.network.ApiService
+import java.time.Instant
 import javax.inject.Inject
 
+/**
+ * Пользовательские теги — локальная функция приложения.
+ * Публичный API /tags возвращает переводы статусов, не пользовательские теги.
+ */
 interface TagRepository {
     suspend fun syncTags()
     suspend fun getTags(): List<Tag>
@@ -22,25 +26,17 @@ interface TagRepository {
 }
 
 class TagRepositoryImpl @Inject constructor(
-    private val api: ApiService,
     private val db: AppDatabase,
     private val logger: AppLogger
 ) : TagRepository {
+
+    private suspend fun nextLocalId(): Long {
+        val maxId = db.tagDao().getAll().maxOfOrNull { it.id } ?: 0L
+        return if (maxId < 0) maxId - 1 else -(maxId + 1)
+    }
+
     override suspend fun syncTags() {
-        try {
-            val remote = api.getTags()
-            val mapped = remote.map {
-                Tag(
-                    id = it.id,
-                    name = it.name,
-                    color = it.color,
-                    createdAt = it.created_at
-                )
-            }
-            db.tagDao().upsertAll(mapped)
-        } catch (e: Exception) {
-            logger.warn("TagRepository", "Failed to sync tags", e)
-        }
+        // Теги хранятся только локально
     }
 
     override suspend fun getTags(): List<Tag> = db.tagDao().getAll()
@@ -49,14 +45,11 @@ class TagRepositoryImpl @Inject constructor(
 
     override suspend fun createTag(name: String, color: String?): Tag? {
         return try {
-            val created = api.createTag(
-                ru.fire_core.xauplayer.data.network.TagCreateRequest(name, color)
-            )
             val tag = Tag(
-                id = created.id,
-                name = created.name,
-                color = created.color,
-                createdAt = created.created_at
+                id = nextLocalId(),
+                name = name,
+                color = color,
+                createdAt = Instant.now().toString()
             )
             db.tagDao().upsert(tag)
             tag
@@ -68,18 +61,13 @@ class TagRepositoryImpl @Inject constructor(
 
     override suspend fun updateTag(tagId: Long, name: String?, color: String?): Tag? {
         return try {
-            val updated = api.updateTag(
-                tagId,
-                ru.fire_core.xauplayer.data.network.TagUpdateRequest(name, color)
+            val existing = db.tagDao().getById(tagId) ?: return null
+            val updated = existing.copy(
+                name = name ?: existing.name,
+                color = color ?: existing.color
             )
-            val tag = Tag(
-                id = updated.id,
-                name = updated.name,
-                color = updated.color,
-                createdAt = updated.created_at
-            )
-            db.tagDao().upsert(tag)
-            tag
+            db.tagDao().upsert(updated)
+            updated
         } catch (e: Exception) {
             logger.error("TagRepository", "Failed to update tag", e)
             null
@@ -88,7 +76,6 @@ class TagRepositoryImpl @Inject constructor(
 
     override suspend fun deleteTag(tagId: Long): Boolean {
         return try {
-            api.deleteTag(tagId)
             db.tagDao().deleteById(tagId)
             db.bookTagRelationDao().deleteByTagId(tagId)
             db.seriesTagRelationDao().deleteByTagId(tagId)
@@ -101,65 +88,24 @@ class TagRepositoryImpl @Inject constructor(
 
     override suspend fun getBookTags(bookId: Long): List<Tag> {
         return try {
-            val remote = api.getBookTags(bookId)
-            val mapped = remote.map {
-                Tag(
-                    id = it.id,
-                    name = it.name,
-                    color = it.color,
-                    createdAt = it.created_at
-                )
-            }
-            db.tagDao().upsertAll(mapped)
-            
-            // Удаляем все старые связи для этой книги
-            db.bookTagRelationDao().deleteByBookId(bookId)
-            
-            // Добавляем новые связи
-            mapped.forEach { tag ->
-                db.bookTagRelationDao().insert(
-                    ru.fire_core.xauplayer.data.local.entities.BookTagRelation(bookId, tag.id)
-                )
-            }
             db.bookTagRelationDao().getTagsByBookId(bookId)
         } catch (e: Exception) {
-            logger.warn("TagRepository", "Failed to sync book tags, using local data", e)
-            db.bookTagRelationDao().getTagsByBookId(bookId)
+            logger.warn("TagRepository", "Failed to get book tags", e)
+            emptyList()
         }
     }
 
     override suspend fun getSeriesTags(seriesId: Long): List<Tag> {
         return try {
-            val remote = api.getSeriesTags(seriesId)
-            val mapped = remote.map {
-                Tag(
-                    id = it.id,
-                    name = it.name,
-                    color = it.color,
-                    createdAt = it.created_at
-                )
-            }
-            db.tagDao().upsertAll(mapped)
-            
-            // Удаляем все старые связи для этой серии
-            db.seriesTagRelationDao().deleteBySeriesId(seriesId)
-            
-            // Добавляем новые связи
-            mapped.forEach { tag ->
-                db.seriesTagRelationDao().insert(
-                    ru.fire_core.xauplayer.data.local.entities.SeriesTagRelation(seriesId, tag.id)
-                )
-            }
             db.seriesTagRelationDao().getTagsBySeriesId(seriesId)
         } catch (e: Exception) {
-            logger.warn("TagRepository", "Failed to sync series tags, using local data", e)
-            db.seriesTagRelationDao().getTagsBySeriesId(seriesId)
+            logger.warn("TagRepository", "Failed to get series tags", e)
+            emptyList()
         }
     }
 
     override suspend fun addTagToBook(bookId: Long, tagId: Long): Boolean {
         return try {
-            api.addTagToBook(bookId, tagId)
             db.bookTagRelationDao().insert(
                 ru.fire_core.xauplayer.data.local.entities.BookTagRelation(bookId, tagId)
             )
@@ -172,7 +118,6 @@ class TagRepositoryImpl @Inject constructor(
 
     override suspend fun removeTagFromBook(bookId: Long, tagId: Long): Boolean {
         return try {
-            api.removeTagFromBook(bookId, tagId)
             db.bookTagRelationDao().delete(bookId, tagId)
             true
         } catch (e: Exception) {
@@ -183,7 +128,6 @@ class TagRepositoryImpl @Inject constructor(
 
     override suspend fun addTagToSeries(seriesId: Long, tagId: Long): Boolean {
         return try {
-            api.addTagToSeries(seriesId, tagId)
             db.seriesTagRelationDao().insert(
                 ru.fire_core.xauplayer.data.local.entities.SeriesTagRelation(seriesId, tagId)
             )
@@ -196,7 +140,6 @@ class TagRepositoryImpl @Inject constructor(
 
     override suspend fun removeTagFromSeries(seriesId: Long, tagId: Long): Boolean {
         return try {
-            api.removeTagFromSeries(seriesId, tagId)
             db.seriesTagRelationDao().delete(seriesId, tagId)
             true
         } catch (e: Exception) {
@@ -205,4 +148,3 @@ class TagRepositoryImpl @Inject constructor(
         }
     }
 }
-

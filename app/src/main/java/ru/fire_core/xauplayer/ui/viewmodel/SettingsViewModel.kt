@@ -45,6 +45,12 @@ class SettingsViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(AppConfig.STATE_FLOW_SUBSCRIPTION_TIMEOUT_MS),
         initialValue = false
     )
+
+    val autoPlayNextSeriesBook: StateFlow<Boolean> = settingsStore.autoPlayNextSeriesBook.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(AppConfig.STATE_FLOW_SUBSCRIPTION_TIMEOUT_MS),
+        initialValue = false
+    )
     
     val defaultSpeed: StateFlow<Float> = settingsStore.defaultSpeed.stateIn(
         scope = viewModelScope,
@@ -143,6 +149,12 @@ class SettingsViewModel @Inject constructor(
     fun setAutoDelete(enabled: Boolean) {
         viewModelScope.launch {
             settingsStore.setAutoDelete(enabled)
+        }
+    }
+
+    fun setAutoPlayNextSeriesBook(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setAutoPlayNextSeriesBook(enabled)
         }
     }
     

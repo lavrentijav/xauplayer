@@ -40,6 +40,7 @@ import ru.fire_core.xauplayer.player.PlayerHolder
 import ru.fire_core.xauplayer.player.PlayerService
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import ru.fire_core.xauplayer.data.datastore.SettingsStore
+import ru.fire_core.xauplayer.data.network.StreamUrlResolver
 import kotlinx.coroutines.flow.first
 import java.io.File
 import javax.inject.Inject
@@ -84,6 +85,7 @@ class PlayerViewModel @Inject constructor(
     private val seriesUseCases: SeriesUseCases,
     private val statusUseCases: StatusUseCases,
     private val coverManager: CoverManager,
+    private val streamUrlResolver: StreamUrlResolver,
     private val logger: AppLogger,
     private val settingsStore: SettingsStore,
     val equalizerManager: ru.fire_core.xauplayer.player.EqualizerManager
@@ -661,20 +663,16 @@ class PlayerViewModel @Inject constructor(
                 logger.info("PlayerViewModel", "Preparing downloaded chapter: ${file.absolutePath}")
                 android.net.Uri.fromFile(file).toString()
             } else {
-                val baseUrl = settingsStore.baseUrl.first()
-                val streamUrl = "${baseUrl}books/${book.id}/stream/${chapter.id}"
+                val streamUrl = streamUrlResolver.resolve(book.id, chapter.id)
                 logger.info("PlayerViewModel", "Preparing stream URL: $streamUrl")
                 streamUrl
             }
-            
-            // Получаем плеер
+
             val player = holder.player()
-            
-            // Запускаем сервис для уведомлений
+
             val serviceIntent = Intent(context, PlayerService::class.java)
             context.startForegroundService(serviceIntent)
-            
-            // Восстанавливаем скорость воспроизведения
+
             if (savedProgress != null && savedProgress.speed > 0) {
                 player.setPlaybackSpeed(savedProgress.speed)
             } else {
@@ -689,11 +687,9 @@ class PlayerViewModel @Inject constructor(
             } catch (e: Exception) {
                 // Если не удалось, используем URL (но в офлайн режиме может не загрузиться)
                 logger.warn("PlayerViewModel", "Failed to get cached cover, using URL", e)
-                val baseUrl = settingsStore.baseUrl.first()
-                "$baseUrl/covers/books/${book.id}"
+                coverManager.getBookCoverUrl(book.id)
             }
-            
-            // Подготавливаем плеер (но не начинаем воспроизведение)
+
             holder.prepare(
                 url = audioUrl,
                 title = chapter.title,
@@ -754,7 +750,7 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun playChapter(chapter: Chapter, book: Book) = viewModelScope.launch {
+    fun playChapter(chapter: Chapter, book: Book, preferredSpeed: Float? = null) = viewModelScope.launch {
         // Предотвращаем множественные запуски
         if (isPlayingChapter) {
             logger.warn("PlayerViewModel", "Already playing a chapter, ignoring request")
@@ -799,9 +795,7 @@ class PlayerViewModel @Inject constructor(
                 // Используем file:// URI для локальных файлов
                 android.net.Uri.fromFile(file).toString()
             } else {
-                // Используем потоковое воспроизведение
-                val baseUrl = settingsStore.baseUrl.first()
-                val streamUrl = "${baseUrl}books/${book.id}/stream/${chapter.id}"
+                val streamUrl = streamUrlResolver.resolve(book.id, chapter.id)
                 logger.info("PlayerViewModel", "Using stream URL: $streamUrl")
                 streamUrl
             }
@@ -815,12 +809,13 @@ class PlayerViewModel @Inject constructor(
             
             // Загружаем сохраненный прогресс
             val savedProgress = getProgress(book.id)
+            val speedToUse = preferredSpeed
+                ?: savedProgress?.speed?.takeIf { it > 0 && savedProgress.chapterId == chapter.id }
+            if (speedToUse != null && speedToUse > 0) {
+                player.setPlaybackSpeed(speedToUse)
+                _uiState.value = _uiState.value.copy(playbackSpeed = speedToUse)
+            }
             val startPosition = if (savedProgress?.chapterId == chapter.id) {
-                // Восстанавливаем скорость воспроизведения из сохраненного прогресса
-                if (savedProgress.speed > 0) {
-                    player.setPlaybackSpeed(savedProgress.speed)
-                    _uiState.value = _uiState.value.copy(playbackSpeed = savedProgress.speed)
-                }
                 savedProgress.positionMs
             } else {
                 0L
@@ -833,17 +828,16 @@ class PlayerViewModel @Inject constructor(
             } catch (e: Exception) {
                 // Если не удалось, используем URL (но в офлайн режиме может не загрузиться)
                 logger.warn("PlayerViewModel", "Failed to get cached cover, using URL", e)
-                val baseUrl = settingsStore.baseUrl.first()
-                "$baseUrl/covers/books/${book.id}"
+                coverManager.getBookCoverUrl(book.id)
             }
-            
+
             holder.prepare(
                 url = audioUrl,
                 title = chapter.title,
                 artist = "${book.title} - ${book.author}",
                 coverUrl = coverUrl
             )
-            
+
             _uiState.value = _uiState.value.copy(
                 selectedChapter = chapter,
                 isBuffering = true, // Начинаем буферизацию
@@ -992,13 +986,49 @@ class PlayerViewModel @Inject constructor(
         val currentBook = _uiState.value.selectedBook ?: return
         val currentChapter = _uiState.value.selectedChapter ?: return
         val chapters = _uiState.value.chapters
-        
+        val currentSpeed = _uiState.value.playbackSpeed
+
         val currentIndex = chapters.indexOfFirst { it.id == currentChapter.id }
         if (currentIndex >= 0 && currentIndex < chapters.size - 1) {
             val nextChapter = chapters[currentIndex + 1]
             logger.info("PlayerViewModel", "Auto-playing next chapter: ${nextChapter.title}")
             playChapter(nextChapter, currentBook)
+            return
         }
+
+        if (!settingsStore.autoPlayNextSeriesBook.first()) return
+        val seriesId = currentBook.seriesId ?: return
+
+        val seriesBooks = getBooks()
+            .filter { it.seriesId == seriesId }
+            .sortedBy { it.seriesOrder ?: Int.MAX_VALUE }
+        val bookIndex = seriesBooks.indexOfFirst { it.id == currentBook.id }
+        if (bookIndex < 0 || bookIndex >= seriesBooks.size - 1) return
+
+        val nextBook = seriesBooks[bookIndex + 1]
+        var nextChapters = getChapters(nextBook.id)
+        if (nextChapters.isEmpty()) {
+            try {
+                syncChapters(nextBook.id, force = true)
+                nextChapters = getChapters(nextBook.id)
+            } catch (e: Exception) {
+                logger.warn("PlayerViewModel", "Failed to load chapters for next series book ${nextBook.id}", e)
+                return
+            }
+        }
+        if (nextChapters.isEmpty()) return
+
+        val firstChapter = nextChapters.first()
+        logger.info("PlayerViewModel", "Auto-playing next series book: ${nextBook.title}")
+
+        _uiState.value = _uiState.value.copy(
+            selectedBook = nextBook,
+            chapters = nextChapters,
+            selectedChapter = firstChapter,
+            playbackSpeed = currentSpeed
+        )
+        settingsStore.setLastBookId(nextBook.id)
+        playChapter(firstChapter, nextBook, preferredSpeed = currentSpeed)
     }
 
     fun seekTo(positionMs: Long) {
@@ -1327,17 +1357,55 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun downloadBook(bookId: Long) {
+    fun downloadBook(bookId: Long) = viewModelScope.launch {
         try {
-            val chapters = _uiState.value.chapters
+            var chapters = if (_uiState.value.selectedBook?.id == bookId) {
+                _uiState.value.chapters
+            } else {
+                getChapters(bookId)
+            }
+            if (chapters.isEmpty()) {
+                syncChapters(bookId, force = true)
+                chapters = getChapters(bookId)
+            }
             if (chapters.isEmpty()) {
                 logger.warn("PlayerViewModel", "No chapters to download for book $bookId")
-                return
+                return@launch
             }
             downloadManager.downloadBook(chapters, bookId)
             logger.info("PlayerViewModel", "Started downloading book $bookId with ${chapters.size} chapters")
         } catch (e: Exception) {
             logger.error("PlayerViewModel", "Failed to download book $bookId", e)
+        }
+    }
+
+    fun downloadSeries(seriesId: Long) = viewModelScope.launch {
+        try {
+            val seriesBooks = getBooks()
+                .filter { it.seriesId == seriesId }
+                .sortedBy { it.seriesOrder ?: Int.MAX_VALUE }
+            if (seriesBooks.isEmpty()) {
+                logger.warn("PlayerViewModel", "No books found for series $seriesId")
+                return@launch
+            }
+            for (book in seriesBooks) {
+                var chapters = getChapters(book.id)
+                if (chapters.isEmpty()) {
+                    try {
+                        syncChapters(book.id, force = true)
+                        chapters = getChapters(book.id)
+                    } catch (e: Exception) {
+                        logger.warn("PlayerViewModel", "Failed to sync chapters for book ${book.id} in series $seriesId", e)
+                        continue
+                    }
+                }
+                if (chapters.isNotEmpty()) {
+                    downloadManager.downloadBook(chapters, book.id)
+                }
+            }
+            logger.info("PlayerViewModel", "Started downloading series $seriesId (${seriesBooks.size} books)")
+        } catch (e: Exception) {
+            logger.error("PlayerViewModel", "Failed to download series $seriesId", e)
         }
     }
 

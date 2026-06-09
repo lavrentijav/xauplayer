@@ -47,6 +47,11 @@ class StatusRepositoryImpl @Inject constructor(
         
         return try {
             val status = api.getBookStatus(bookId)
+            if (status.status.isNullOrBlank()) {
+                db.bookStatusDao().delete(bookId)
+                statusCache.remove(bookId)
+                return null
+            }
             val bookStatus = BookStatus(
                 bookId = status.book_id,
                 status = status.status,
@@ -54,7 +59,6 @@ class StatusRepositoryImpl @Inject constructor(
                 updatedAt = status.updated_at
             )
             db.bookStatusDao().upsert(bookStatus)
-            // Обновляем кэш
             statusCache[bookId] = Pair(bookStatus, now)
             bookStatus
         } catch (e: Exception) {
@@ -80,6 +84,7 @@ class StatusRepositoryImpl @Inject constructor(
                 bookId,
                 ru.fire_core.xauplayer.data.network.StatusRequest(status)
             )
+            if (result.status.isNullOrBlank()) return null
             val bookStatus = BookStatus(
                 bookId = result.book_id,
                 status = result.status,
@@ -154,9 +159,10 @@ class StatusRepositoryImpl @Inject constructor(
                             async {
                                 try {
                                     val statusDto = api.getBookStatus(book.id)
+                                    val resolvedStatus = statusDto.status ?: status
                                     val bookStatus = BookStatus(
                                         bookId = statusDto.book_id,
-                                        status = statusDto.status,
+                                        status = resolvedStatus,
                                         createdAt = statusDto.created_at,
                                         updatedAt = statusDto.updated_at
                                     )
@@ -206,53 +212,13 @@ class StatusRepositoryImpl @Inject constructor(
             
             mapped
         } catch (e: Exception) {
-            // Если новый endpoint не работает, пробуем старые методы для обратной совместимости
+            logger.warn("StatusRepository", "Failed to get books by status, using cached data", e)
             try {
-                val remote = when (status) {
-                    "wanted" -> api.getWantedBooks(offset, limit)
-                    "listening" -> api.getListeningBooks()
-                    "completed" -> api.getCompletedBooks()
-                    "dropped" -> api.getDroppedBooks()
-                    else -> emptyList()
-                }
-                val mapped = remote.map {
-                    ru.fire_core.xauplayer.data.local.entities.Book(
-                        id = it.id,
-                        title = it.title,
-                        author = it.author,
-                        narrator = it.narrator,
-                        coverUrl = it.cover_url,
-                        description = it.description,
-                        seriesId = it.series_id,
-                        seriesOrder = it.series_order,
-                        uploadedAt = it.uploaded_at
-                    )
-                }
-                db.bookDao().upsertAll(mapped)
-                
-                // Сохраняем статусы книг
-                val bookStatuses = mapped.map { book ->
-                    BookStatus(
-                        bookId = book.id,
-                        status = status,
-                        createdAt = null,
-                        updatedAt = null
-                    )
-                }
-                if (bookStatuses.isNotEmpty()) {
-                    db.bookStatusDao().upsertAll(bookStatuses)
-                }
-                mapped
-            } catch (e2: Exception) {
-                logger.warn("StatusRepository", "Failed to get books by status using legacy methods, using cached data", e2)
-                // Если нет сети, используем локальные данные
-                try {
-                    val statusIds = db.bookStatusDao().getByStatus(status).map { it.bookId }
-                    db.bookDao().getAll().filter { it.id in statusIds }
-                } catch (dbException: Exception) {
-                    logger.error("StatusRepository", "Failed to get books from database", dbException)
-                    emptyList()
-                }
+                val statusIds = db.bookStatusDao().getByStatus(status).map { it.bookId }
+                db.bookDao().getAll().filter { it.id in statusIds }
+            } catch (dbException: Exception) {
+                logger.error("StatusRepository", "Failed to get books from database", dbException)
+                emptyList()
             }
         }
     }
@@ -281,9 +247,10 @@ class StatusRepositoryImpl @Inject constructor(
                                     async {
                                         try {
                                             val statusDto = api.getBookStatus(bookDto.id)
+                                            val resolvedStatus = statusDto.status ?: status
                                             val bookStatus = BookStatus(
                                                 bookId = statusDto.book_id,
-                                                status = statusDto.status,
+                                                status = resolvedStatus,
                                                 createdAt = statusDto.created_at,
                                                 updatedAt = statusDto.updated_at
                                             )
@@ -340,6 +307,10 @@ class StatusRepositoryImpl @Inject constructor(
     override suspend fun getSeriesStatus(seriesId: Long): SeriesStatus? {
         return try {
             val status = api.getSeriesStatus(seriesId)
+            if (status.status.isNullOrBlank()) {
+                db.seriesStatusDao().delete(seriesId)
+                return null
+            }
             val seriesStatus = SeriesStatus(
                 seriesId = status.series_id,
                 status = status.status,
@@ -366,6 +337,7 @@ class StatusRepositoryImpl @Inject constructor(
                 seriesId,
                 ru.fire_core.xauplayer.data.network.StatusRequest(status)
             )
+            if (result.status.isNullOrBlank()) return null
             val seriesStatus = SeriesStatus(
                 seriesId = result.series_id,
                 status = result.status,
@@ -418,9 +390,10 @@ class StatusRepositoryImpl @Inject constructor(
             mapped.forEach { series ->
                 try {
                     val statusDto = api.getSeriesStatus(series.id)
+                    val resolvedStatus = statusDto.status ?: status
                     val seriesStatus = SeriesStatus(
                         seriesId = statusDto.series_id,
-                        status = statusDto.status,
+                        status = resolvedStatus,
                         createdAt = statusDto.created_at,
                         updatedAt = statusDto.updated_at
                     )
@@ -439,36 +412,13 @@ class StatusRepositoryImpl @Inject constructor(
             }
             mapped
         } catch (e: Exception) {
-            logger.warn("StatusRepository", "Failed to get series by status using new endpoint, trying legacy methods", e)
-            // Если новый endpoint не работает, пробуем старые методы для обратной совместимости
+            logger.warn("StatusRepository", "Failed to get series by status, using cached data", e)
             try {
-                val remote = when (status) {
-                    "wanted" -> api.getWantedSeries()
-                    "listening" -> api.getListeningSeries()
-                    "completed" -> api.getCompletedSeries()
-                    "dropped" -> api.getDroppedSeries()
-                    else -> emptyList()
-                }
-                val mapped = remote.map {
-                    ru.fire_core.xauplayer.data.local.entities.Series(
-                        id = it.id,
-                        name = it.name,
-                        description = it.description,
-                        coverUrl = it.cover_url
-                    )
-                }
-                db.seriesDao().upsertAll(mapped)
-                mapped
-            } catch (e2: Exception) {
-                logger.warn("StatusRepository", "Failed to get series by status using legacy methods, using cached data", e2)
-                // Если нет сети, используем локальные данные
-                try {
-                    val statusIds = db.seriesStatusDao().getByStatus(status).map { it.seriesId }
-                    db.seriesDao().getAll().filter { it.id in statusIds }
-                } catch (dbException: Exception) {
-                    logger.error("StatusRepository", "Failed to get series from database", dbException)
-                    emptyList()
-                }
+                val statusIds = db.seriesStatusDao().getByStatus(status).map { it.seriesId }
+                db.seriesDao().getAll().filter { it.id in statusIds }
+            } catch (dbException: Exception) {
+                logger.error("StatusRepository", "Failed to get series from database", dbException)
+                emptyList()
             }
         }
     }

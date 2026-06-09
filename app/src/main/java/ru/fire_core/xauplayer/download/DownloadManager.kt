@@ -16,6 +16,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import ru.fire_core.xauplayer.data.datastore.SettingsStore
+import ru.fire_core.xauplayer.data.network.ApiUrlBuilder
 import ru.fire_core.xauplayer.data.local.AppDatabase
 import ru.fire_core.xauplayer.data.local.entities.Chapter
 import ru.fire_core.xauplayer.data.local.entities.DownloadedChapter
@@ -63,20 +64,11 @@ class DownloadManager @Inject constructor(
     }
 
     private suspend fun startNextDownload() {
-        // Получаем настройку максимального количества параллельных загрузок
         val maxConcurrent = settingsStore.getMaxConcurrentDownloads()
-        
-        // Проверяем, есть ли место для новой загрузки
-        val activeCount = activeDownloads.values.count { it.isActive }
-        if (activeCount >= maxConcurrent || downloadQueue.isEmpty()) {
-            return
+        while (activeDownloads.values.count { it.isActive } < maxConcurrent && downloadQueue.isNotEmpty()) {
+            val (chapter, bookId) = downloadQueue.removeFirstOrNull() ?: break
+            downloadChapterInternal(chapter, bookId)
         }
-        
-        // Берем следующую главу из очереди
-        val (chapter, bookId) = downloadQueue.removeFirstOrNull() ?: return
-        
-        // Запускаем загрузку
-        downloadChapterInternal(chapter, bookId)
     }
     
     fun downloadChapter(chapter: Chapter, bookId: Long) {
@@ -92,11 +84,13 @@ class DownloadManager @Inject constructor(
             return
         }
         
-        // Добавляем в очередь
         downloadQueue.add(Pair(chapter, bookId))
-        
-        // Устанавливаем состояние QUEUED
-        updateProgress(chapter.id, bookId, 0, 0, 0, DownloadState.QUEUED, null)
+
+        val existing = _downloadProgress.value[chapter.id]
+        val totalBytes = existing?.totalBytes?.takeIf { it > 0 }
+            ?: chapter.fileSizeBytes
+            ?: 0L
+        updateProgress(chapter.id, bookId, totalBytes, 0, 0, DownloadState.QUEUED, null)
         
         // Пытаемся начать загрузку
         downloadScope.launch {
@@ -111,19 +105,23 @@ class DownloadManager @Inject constructor(
                 val existing = db.downloadedChapterDao().getByChapterId(chapter.id)
                 if (existing != null && File(existing.localPath).exists()) {
                     logger.info("DownloadManager", "Chapter ${chapter.id} already downloaded, skipping")
-                    updateProgress(chapter.id, bookId, existing.fileSize, existing.fileSize, 0, DownloadState.COMPLETED, null)
+                    clearProgress(chapter.id)
                     activeDownloads.remove(chapter.id)
-                    // Запускаем следующую загрузку из очереди
                     startNextDownload()
                     return@launch
                 }
                 
                 val baseUrl = settingsStore.baseUrl.first()
-                // Используем download_url из API, если доступен, иначе используем /download/ endpoint
-                val url = chapter.downloadUrl?.let { 
-                    // Если download_url относительный, добавляем baseUrl
-                    if (it.startsWith("http")) it else "${baseUrl}${it.removePrefix("/")}"
-                } ?: "${baseUrl}books/${bookId}/download/${chapter.id}"
+                val url = chapter.downloadUrl?.let {
+                    logger.debug("DownloadManager", "Using chapter.downloadUrl: $it")
+                    ApiUrlBuilder.resolveAbsolute(baseUrl, it)
+                } ?: run {
+                    val finalUrl = ApiUrlBuilder.join(baseUrl, "books/${bookId}/download/${chapter.id}")
+                    logger.debug("DownloadManager", "Using download endpoint: $finalUrl")
+                    finalUrl
+                }
+                
+                logger.info("DownloadManager", "Downloading chapter ${chapter.id} from URL: $url")
                 
                 // Проверяем, есть ли уже известный размер для этой главы
                 val existingProgress = _downloadProgress.value[chapter.id]
@@ -135,9 +133,9 @@ class DownloadManager @Inject constructor(
                 val response = okHttpClient.newCall(request).execute()
                 
                 if (!response.isSuccessful) {
-                    updateProgress(chapter.id, bookId, knownTotalBytes, 0, 0, DownloadState.ERROR, "HTTP ${response.code}")
+                    clearProgress(chapter.id)
                     activeDownloads.remove(chapter.id)
-                    // Запускаем следующую загрузку из очереди
+                    notificationHelper.showDownloadError(chapter.title, "HTTP ${response.code}")
                     startNextDownload()
                     return@launch
                 }
@@ -261,6 +259,8 @@ class DownloadManager @Inject constructor(
                         notificationHelper.showDownloadComplete(chapter.title)
                         activeDownloads.remove(chapter.id)
                         logger.info("DownloadManager", "Chapter ${chapter.id} downloaded successfully")
+                        // Убираем из карты прогресса — UI переключится на «скачано»
+                        clearProgress(chapter.id)
                         
                         // Проверяем, все ли главы книги скачаны, и обновляем статус
                         checkAndUpdateBookStatus(bookId)
@@ -277,10 +277,9 @@ class DownloadManager @Inject constructor(
                 startNextDownload()
             } catch (e: Exception) {
                 logger.error("DownloadManager", "Failed to download chapter ${chapter.id}", e)
-                updateProgress(chapter.id, bookId, 0, 0, 0, DownloadState.ERROR, e.message)
+                clearProgress(chapter.id)
                 notificationHelper.showDownloadError(chapter.title, e.message ?: "Unknown error")
                 activeDownloads.remove(chapter.id)
-                // Запускаем следующую загрузку из очереди
                 startNextDownload()
             }
         }
@@ -293,10 +292,7 @@ class DownloadManager @Inject constructor(
         // Удаляем из очереди, если там есть
         downloadQueue.removeAll { it.first.id == chapterId }
         // Обновляем состояние
-        val currentProgress = _downloadProgress.value[chapterId]
-        if (currentProgress != null) {
-            updateProgress(chapterId, currentProgress.bookId, 0, 0, 0, DownloadState.CANCELLED, null)
-        }
+        clearProgress(chapterId)
         // Запускаем следующую загрузку из очереди
         downloadScope.launch {
             startNextDownload()
@@ -304,10 +300,10 @@ class DownloadManager @Inject constructor(
     }
     
     fun removeFromQueue(chapterId: Long) {
-        // Удаляем из очереди, но не отменяем если уже скачивается
         if (!activeDownloads.containsKey(chapterId)) {
             downloadQueue.removeAll { it.first.id == chapterId }
-            updateProgress(chapterId, _downloadProgress.value[chapterId]?.bookId ?: 0L, 0, 0, 0, DownloadState.IDLE, null)
+            clearProgress(chapterId)
+            downloadScope.launch { startNextDownload() }
         }
     }
     
@@ -327,8 +323,7 @@ class DownloadManager @Inject constructor(
                     
                     activeDownloads[chapter.id]?.cancel()
                     activeDownloads.remove(chapter.id)
-                    // Обновляем прогресс
-                    updateProgress(chapter.id, bookId, 0, 0, 0, DownloadState.CANCELLED, null)
+                    clearProgress(chapter.id)
                 }
                 
                 // Очищаем очередь от глав этой книги (только не скачанные)
@@ -366,41 +361,47 @@ class DownloadManager @Inject constructor(
             it.realOrder ?: it.chapterOrder 
         }
         
-        // Используем размеры из API вместо HEAD запросов
         downloadScope.launch {
             var totalBookSize = 0L
-            
-            // Используем размеры глав из API, если они доступны
+
             sortedChapters.forEach { chapter ->
-                val chapterSize = chapter.fileSizeBytes ?: 0L
-                if (chapterSize > 0) {
-                    totalBookSize += chapterSize
-                    // Обновляем прогресс для главы с известным размером
-                    updateProgress(chapter.id, bookId, chapterSize, 0, 0, DownloadState.QUEUED, null)
+                val existing = withContext(Dispatchers.IO) {
+                    db.downloadedChapterDao().getByChapterId(chapter.id)
+                }
+                val alreadyDownloaded = existing != null && File(existing.localPath).exists()
+                val chapterSize = chapter.fileSizeBytes ?: existing?.fileSize ?: 0L
+
+                if (alreadyDownloaded) {
+                    clearProgress(chapter.id)
+                    val size = chapterSize.takeIf { it > 0 } ?: existing!!.fileSize
+                    if (size > 0) totalBookSize += size
                 } else {
-                    // Если размер не известен, устанавливаем QUEUED без размера
-                    updateProgress(chapter.id, bookId, 0, 0, 0, DownloadState.QUEUED, null)
+                    if (chapterSize > 0) {
+                        totalBookSize += chapterSize
+                        updateProgress(chapter.id, bookId, chapterSize, 0, 0, DownloadState.QUEUED, null)
+                    } else {
+                        updateProgress(chapter.id, bookId, 0, 0, 0, DownloadState.QUEUED, null)
+                    }
                 }
             }
-            
+
             if (totalBookSize > 0) {
                 bookTotalSizes[bookId] = totalBookSize
             } else {
-                // Если размеры не были в API, используем старый метод с HEAD запросами
                 val calculatedSize = calculateBookTotalSize(sortedChapters, bookId)
                 if (calculatedSize > 0) {
                     bookTotalSizes[bookId] = calculatedSize
                 }
             }
-            
-            // Добавляем главы в очередь
+
             sortedChapters.forEach { chapter ->
-                // Проверяем не загружена ли уже
                 val existing = withContext(Dispatchers.IO) {
                     db.downloadedChapterDao().getByChapterId(chapter.id)
                 }
                 if (existing == null || !File(existing.localPath).exists()) {
                     downloadChapter(chapter, bookId)
+                } else {
+                    clearProgress(chapter.id)
                 }
             }
         }
@@ -409,21 +410,30 @@ class DownloadManager @Inject constructor(
     private suspend fun calculateBookTotalSize(chapters: List<Chapter>, bookId: Long): Long {
         return withContext(Dispatchers.IO) {
             try {
+                val knownSize = chapters.sumOf { it.fileSizeBytes ?: 0L }
+                if (knownSize > 0) {
+                    chapters.forEach { chapter ->
+                        val size = chapter.fileSizeBytes ?: 0L
+                        if (size > 0) {
+                            updateProgress(chapter.id, bookId, size, 0, 0, DownloadState.QUEUED, null)
+                        }
+                    }
+                    return@withContext knownSize
+                }
+
                 val baseUrl = settingsStore.baseUrl.first()
                 var totalSize = 0L
-                
-                // Делаем HEAD запросы для каждой главы, чтобы узнать размер
+
                 chapters.forEach { chapter ->
                     try {
-                        val url = "${baseUrl}books/${bookId}/stream/${chapter.id}"
+                        val url = ApiUrlBuilder.join(baseUrl, "books/${bookId}/download/${chapter.id}")
                         val headRequest = Request.Builder().url(url).head().build()
                         val headResponse = okHttpClient.newCall(headRequest).execute()
-                        
+
                         if (headResponse.isSuccessful) {
                             val contentLength = headResponse.header("Content-Length")?.toLongOrNull() ?: 0L
                             if (contentLength > 0) {
                                 totalSize += contentLength
-                                // Обновляем прогресс для главы с известным размером
                                 updateProgress(chapter.id, bookId, contentLength, 0, 0, DownloadState.QUEUED, null)
                             }
                         }
@@ -432,7 +442,7 @@ class DownloadManager @Inject constructor(
                         logger.warn("DownloadManager", "Failed to get size for chapter ${chapter.id}: ${e.message}")
                     }
                 }
-                
+
                 totalSize
             } catch (e: Exception) {
                 logger.error("DownloadManager", "Failed to calculate book total size", e)
@@ -498,6 +508,12 @@ class DownloadManager @Inject constructor(
             state = state,
             error = error
         )
+        _downloadProgress.value = current
+    }
+
+    private fun clearProgress(chapterId: Long) {
+        val current = _downloadProgress.value.toMutableMap()
+        current.remove(chapterId)
         _downloadProgress.value = current
     }
 

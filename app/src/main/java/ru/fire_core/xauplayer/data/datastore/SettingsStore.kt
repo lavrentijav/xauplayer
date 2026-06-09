@@ -12,6 +12,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import ru.fire_core.xauplayer.data.network.ApiUrlBuilder
 import java.io.File
 
 private val Context.settingsDataStore by preferencesDataStore(name = "xau_settings")
@@ -25,6 +26,7 @@ class SettingsStore(private val context: Context) {
     private val keyLastUpdateCheck = longPreferencesKey("last_update_check")
     private val keyAutoDownload = booleanPreferencesKey("auto_download")
     private val keyAutoDelete = booleanPreferencesKey("auto_delete")
+    private val keyAutoPlayNextSeriesBook = booleanPreferencesKey("auto_play_next_series_book")
     private val keyDefaultSpeed = floatPreferencesKey("default_speed")
     private val keyRewindSeconds = intPreferencesKey("rewind_seconds")
     private val keyForwardSeconds = intPreferencesKey("forward_seconds")
@@ -43,8 +45,10 @@ class SettingsStore(private val context: Context) {
     private val keyMaxConcurrentDownloads = intPreferencesKey("max_concurrent_downloads") // Максимальное количество параллельных загрузок
     private val keyUseSystemMediaPlayer = booleanPreferencesKey("use_system_media_player") // Использовать системный MediaStyle уведомление (по умолчанию true)
 
-    val baseUrl: Flow<String> = context.settingsDataStore.data.map { 
-        it[keyBaseUrl] ?: ru.fire_core.xauplayer.core.config.AppConfig.DEFAULT_API_BASE_URL
+    val baseUrl: Flow<String> = context.settingsDataStore.data.map {
+        ApiUrlBuilder.normalizeApiBaseUrl(
+            it[keyBaseUrl] ?: ru.fire_core.xauplayer.core.config.AppConfig.DEFAULT_API_BASE_URL
+        )
     }
     
     val updateUrl: Flow<String> = context.settingsDataStore.data.map {
@@ -61,6 +65,10 @@ class SettingsStore(private val context: Context) {
     
     val autoDelete: Flow<Boolean> = context.settingsDataStore.data.map {
         it[keyAutoDelete] ?: false
+    }
+
+    val autoPlayNextSeriesBook: Flow<Boolean> = context.settingsDataStore.data.map {
+        it[keyAutoPlayNextSeriesBook] ?: false
     }
     
     val defaultSpeed: Flow<Float> = context.settingsDataStore.data.map {
@@ -141,8 +149,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setBaseUrl(url: String) {
         require(url.isNotBlank()) { "URL cannot be blank" }
         require(url.startsWith("http://") || url.startsWith("https://")) { "URL must start with http:// or https://" }
+        val normalized = ApiUrlBuilder.normalizeApiBaseUrl(url)
         context.settingsDataStore.edit { preferences ->
-            preferences[keyBaseUrl] = url
+            preferences[keyBaseUrl] = normalized
         }
     }
 
@@ -181,6 +190,12 @@ class SettingsStore(private val context: Context) {
     suspend fun setAutoDelete(enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
             preferences[keyAutoDelete] = enabled
+        }
+    }
+
+    suspend fun setAutoPlayNextSeriesBook(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[keyAutoPlayNextSeriesBook] = enabled
         }
     }
     

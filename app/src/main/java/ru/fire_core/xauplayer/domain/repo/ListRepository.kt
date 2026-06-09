@@ -5,9 +5,13 @@ import ru.fire_core.xauplayer.data.local.AppDatabase
 import ru.fire_core.xauplayer.data.local.entities.Book
 import ru.fire_core.xauplayer.data.local.entities.BookList
 import ru.fire_core.xauplayer.data.local.entities.Series
-import ru.fire_core.xauplayer.data.network.ApiService
+import java.time.Instant
 import javax.inject.Inject
 
+/**
+ * Пользовательские списки — локальная функция приложения.
+ * В публичном API (API.md) эндпоинтов /lists нет.
+ */
 interface ListRepository {
     suspend fun syncLists()
     suspend fun getLists(): List<BookList>
@@ -24,26 +28,17 @@ interface ListRepository {
 }
 
 class ListRepositoryImpl @Inject constructor(
-    private val api: ApiService,
     private val db: AppDatabase,
     private val logger: AppLogger
 ) : ListRepository {
+
+    private suspend fun nextLocalId(): Long {
+        val maxId = db.listDao().getAll().maxOfOrNull { it.id } ?: 0L
+        return if (maxId < 0) maxId - 1 else -(maxId + 1)
+    }
+
     override suspend fun syncLists() {
-        try {
-            val remote = api.getLists()
-            val mapped = remote.map {
-                BookList(
-                    id = it.id,
-                    name = it.name,
-                    description = it.description,
-                    createdAt = it.created_at,
-                    updatedAt = it.updated_at
-                )
-            }
-            db.listDao().upsertAll(mapped)
-        } catch (e: Exception) {
-            logger.warn("ListRepository", "Failed to sync lists", e)
-        }
+        // Списки хранятся только локально
     }
 
     override suspend fun getLists(): List<BookList> = db.listDao().getAll()
@@ -52,15 +47,13 @@ class ListRepositoryImpl @Inject constructor(
 
     override suspend fun createList(name: String, description: String?): BookList? {
         return try {
-            val created = api.createList(
-                ru.fire_core.xauplayer.data.network.ListCreateRequest(name, description)
-            )
+            val now = Instant.now().toString()
             val list = BookList(
-                id = created.id,
-                name = created.name,
-                description = created.description,
-                createdAt = created.created_at,
-                updatedAt = created.updated_at
+                id = nextLocalId(),
+                name = name,
+                description = description,
+                createdAt = now,
+                updatedAt = now
             )
             db.listDao().upsert(list)
             list
@@ -72,19 +65,14 @@ class ListRepositoryImpl @Inject constructor(
 
     override suspend fun updateList(listId: Long, name: String?, description: String?): BookList? {
         return try {
-            val updated = api.updateList(
-                listId,
-                ru.fire_core.xauplayer.data.network.ListUpdateRequest(name, description)
+            val existing = db.listDao().getById(listId) ?: return null
+            val updated = existing.copy(
+                name = name ?: existing.name,
+                description = description ?: existing.description,
+                updatedAt = Instant.now().toString()
             )
-            val list = BookList(
-                id = updated.id,
-                name = updated.name,
-                description = updated.description,
-                createdAt = updated.created_at,
-                updatedAt = updated.updated_at
-            )
-            db.listDao().upsert(list)
-            list
+            db.listDao().upsert(updated)
+            updated
         } catch (e: Exception) {
             logger.error("ListRepository", "Failed to update list", e)
             null
@@ -93,7 +81,6 @@ class ListRepositoryImpl @Inject constructor(
 
     override suspend fun deleteList(listId: Long): Boolean {
         return try {
-            api.deleteList(listId)
             db.listDao().deleteById(listId)
             db.bookListRelationDao().deleteByListId(listId)
             db.seriesListRelationDao().deleteByListId(listId)
@@ -106,63 +93,24 @@ class ListRepositoryImpl @Inject constructor(
 
     override suspend fun getListBooks(listId: Long): List<Book> {
         return try {
-            val remote = api.getListBooks(listId)
-            val mapped = remote.map {
-                Book(
-                    id = it.id,
-                    title = it.title,
-                    author = it.author,
-                    narrator = it.narrator,
-                    coverUrl = it.cover_url,
-                    description = it.description,
-                    seriesId = it.series_id,
-                    seriesOrder = it.series_order,
-                    uploadedAt = it.uploaded_at
-                )
-            }
-            db.bookDao().upsertAll(mapped)
-            // Обновляем связи
-            mapped.forEach { book ->
-                db.bookListRelationDao().insert(
-                    ru.fire_core.xauplayer.data.local.entities.BookListRelation(listId, book.id)
-                )
-            }
             db.bookListRelationDao().getBooksByListId(listId)
         } catch (e: Exception) {
-            logger.warn("ListRepository", "Failed to sync list books, using local data", e)
-            db.bookListRelationDao().getBooksByListId(listId)
+            logger.warn("ListRepository", "Failed to get list books", e)
+            emptyList()
         }
     }
 
     override suspend fun getListSeries(listId: Long): List<Series> {
         return try {
-            val remote = api.getListSeries(listId)
-            val mapped = remote.map {
-                Series(
-                    id = it.id,
-                    name = it.name,
-                    description = it.description,
-                    coverUrl = it.cover_url,
-                    createdAt = it.created_at
-                )
-            }
-            db.seriesDao().upsertAll(mapped)
-            // Обновляем связи
-            mapped.forEach { series ->
-                db.seriesListRelationDao().insert(
-                    ru.fire_core.xauplayer.data.local.entities.SeriesListRelation(listId, series.id)
-                )
-            }
             db.seriesListRelationDao().getSeriesByListId(listId)
         } catch (e: Exception) {
-            logger.warn("ListRepository", "Failed to sync list series, using local data", e)
-            db.seriesListRelationDao().getSeriesByListId(listId)
+            logger.warn("ListRepository", "Failed to get list series", e)
+            emptyList()
         }
     }
 
     override suspend fun addBookToList(listId: Long, bookId: Long): Boolean {
         return try {
-            api.addBookToList(listId, bookId)
             db.bookListRelationDao().insert(
                 ru.fire_core.xauplayer.data.local.entities.BookListRelation(listId, bookId)
             )
@@ -175,7 +123,6 @@ class ListRepositoryImpl @Inject constructor(
 
     override suspend fun removeBookFromList(listId: Long, bookId: Long): Boolean {
         return try {
-            api.removeBookFromList(listId, bookId)
             db.bookListRelationDao().delete(listId, bookId)
             true
         } catch (e: Exception) {
@@ -186,7 +133,6 @@ class ListRepositoryImpl @Inject constructor(
 
     override suspend fun addSeriesToList(listId: Long, seriesId: Long): Boolean {
         return try {
-            api.addSeriesToList(listId, seriesId)
             db.seriesListRelationDao().insert(
                 ru.fire_core.xauplayer.data.local.entities.SeriesListRelation(listId, seriesId)
             )
@@ -199,7 +145,6 @@ class ListRepositoryImpl @Inject constructor(
 
     override suspend fun removeSeriesFromList(listId: Long, seriesId: Long): Boolean {
         return try {
-            api.removeSeriesFromList(listId, seriesId)
             db.seriesListRelationDao().delete(listId, seriesId)
             true
         } catch (e: Exception) {
@@ -208,4 +153,3 @@ class ListRepositoryImpl @Inject constructor(
         }
     }
 }
-

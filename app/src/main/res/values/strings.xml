@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">XAuPlayer</string>
+
+    <string name="foreground_service_media_playback_type_description">
+    Воспроизводит аудио в фоне и показывает уведомление с управлением.
+    </string>
 </resources>
+

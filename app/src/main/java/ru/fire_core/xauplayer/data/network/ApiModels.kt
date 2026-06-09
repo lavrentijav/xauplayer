@@ -8,28 +8,29 @@ data class TokenResponse(val access_token: String, val refresh_token: String, va
 data class RefreshRequest(val refresh_token: String)
 
 data class BookDto(
-    val id: Long, 
-    val title: String, 
-    val author: String, 
-    val narrator: String?, 
-    val cover_url: String?, 
+    val id: Long,
+    val title: String,
+    val author: String,
+    val narrator: String?,
+    val cover_url: String?,
     val description: String?,
+    val path: String? = null,
     val series_id: Long? = null,
     val series_order: Int? = null,
     val is_hidden: Boolean = false,
-    val total_size_bytes: Long? = null,  // Общий размер всех глав книги в байтах
+    val total_size_bytes: Long? = null,
     val uploaded_at: String? = null
 )
 
 data class ChapterDto(
-    val id: Long, 
-    val title: String, 
-    val duration: Double,  // в секундах (float в JSON, Double в Kotlin)
-    val path: String,  // относительный путь
-    val order: Int,  // порядок сортировки
-    val real_order: Int? = null,  // реальный порядок (может быть изменен пользователем)
-    val file_size_bytes: Long? = null,  // Размер файла главы в байтах
-    val download_url: String? = null  // URL для прямого скачивания главы
+    val id: Long,
+    val title: String,
+    val duration: Double? = null,
+    val path: String,
+    val order: Int,
+    val real_order: Int? = null,
+    val file_size_bytes: Long? = null,
+    val download_url: String? = null
 )
 
 data class SeriesDto(
@@ -41,18 +42,18 @@ data class SeriesDto(
 )
 
 data class ProgressRequest(
-    val book_id: Long, 
-    val chapter_id: Long, 
-    val position_ms: Long, 
-    val playback_speed: Float, 
+    val book_id: Long,
+    val chapter_id: Long,
+    val position_ms: Long,
+    val playback_speed: Float,
     val last_update: String
 )
 
 data class ProgressDto(
-    val book_id: Long, 
-    val chapter_id: Long, 
-    val position_ms: Long, 
-    val playback_speed: Float, 
+    val book_id: Long,
+    val chapter_id: Long,
+    val position_ms: Long,
+    val playback_speed: Float,
     val last_update: String
 )
 
@@ -65,14 +66,14 @@ data class NoteRequest(val text: String, val timestamp: Long)
 data class NoteDto(
     val id: Long,
     val text: String,
-    val timestamp: Long,  // в миллисекундах
+    val timestamp: Long,
     val created_at: String? = null,
     val updated_at: String? = null
 )
 
 data class DeviceDto(
-    val id: Long, 
-    val device_name: String, 
+    val id: Long,
+    val device_name: String,
     val last_login: String,
     val is_active: Boolean = true,
     val token: String? = null
@@ -82,23 +83,26 @@ data class AccountDto(
     val name: String?,
     val email: String,
     val total_time_minutes: Long? = null,
-    val created_at: String? = null
+    val created_at: String? = null,
+    val is_admin: Boolean = false
 )
 
+/** Ответ GET /status/books/{book_id} — status может быть null */
 data class BookStatusDto(
     val id: Long? = null,
     val user_id: Long? = null,
     val book_id: Long,
-    val status: String,  // "wanted", "listening", "completed", "dropped"
+    val status: String? = null,
     val created_at: String? = null,
     val updated_at: String? = null
 )
 
+/** Ответ GET /status/series/{series_id} */
 data class SeriesStatusDto(
     val id: Long? = null,
     val user_id: Long? = null,
     val series_id: Long,
-    val status: String,  // "wanted", "listening", "completed", "dropped"
+    val status: String? = null,
     val created_at: String? = null,
     val updated_at: String? = null
 )
@@ -111,77 +115,45 @@ data class StatisticsDto(
 )
 
 data class DayStatisticsDto(
-    val date: String,  // YYYY-MM-DD
+    val date: String,
     val minutes_listened: Int,
     val books_completed: Int,
     val chapters_listened: Int
 )
 
-data class ChapterOrderRequest(val real_order: Int?)
-
-data class SeriesCreateRequest(
-    val name: String,
-    val description: String? = null,
-    val cover_url: String? = null
-)
-
-data class SeriesUpdateRequest(
-    val name: String? = null,
-    val description: String? = null,
-    val cover_url: String? = null
-)
-
 data class StatusRequest(val status: String)
-// Устаревшие модели для обратной совместимости
-data class BookStatusRequest(val book_id: Long, val status: String)
-data class SeriesStatusRequest(val series_id: Long, val status: String)
 
-// Списки
-data class ListDto(
-    val id: Long,
-    val name: String,
-    val description: String? = null,
-    val created_at: String? = null,
-    val updated_at: String? = null
-)
-
-data class ListCreateRequest(
-    val name: String,
-    val description: String? = null
-)
-
-data class ListUpdateRequest(
-    val name: String? = null,
-    val description: String? = null
-)
-
-// Теги
-data class TagDto(
-    val id: Long,
-    val name: String,
-    val color: String? = null,
-    val created_at: String? = null
-)
-
-data class TagCreateRequest(
-    val name: String,
-    val color: String? = null
-)
-
-data class TagUpdateRequest(
-    val name: String? = null,
-    val color: String? = null
-)
-
-// Статусы (теги) согласно API_GUIDE.md
 data class StatusDto(
-    val code: String,  // "wanted", "listening", "completed", "dropped"
-    val name: String,  // Локализованное название
-    val description: String  // Локализованное описание
+    val code: String,
+    val name: String,
+    val description: String? = null
 )
 
 data class StatusesResponse(
     val statuses: List<StatusDto>
 )
 
+data class StreamTokenResponse(
+    val url: String,
+    val type: String? = null,
+    val stream_token: String? = null,
+    val expires_in: Int? = null
+)
 
+data class HealthResponse(
+    val status: String,
+    val message: String? = null
+)
+
+data class VersionResponse(
+    val version: String,
+    val build_number: Int
+)
+
+data class ReleaseInfoResponse(
+    val version: String? = null,
+    val build_number: Int? = null,
+    val download_url: String? = null
+)
+
+data class SimpleStatusResponse(val status: String)

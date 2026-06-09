@@ -14,6 +14,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import ru.fire_core.xauplayer.data.datastore.SettingsStore
+import ru.fire_core.xauplayer.data.network.ApiUrlBuilder
 import java.io.File
 import java.io.FileOutputStream
 import javax.inject.Inject
@@ -77,15 +78,12 @@ class CoverManager @Inject constructor(
      */
     suspend fun getBookCoverUrl(bookId: Long): String {
         val baseUrl = settingsStore.baseUrl.first()
-        return "$baseUrl/covers/books/$bookId".replace("//", "/")
+        return ApiUrlBuilder.join(baseUrl, "covers/books/$bookId")
     }
-    
-    /**
-     * Получает URL обложки серии из API
-     */
+
     suspend fun getSeriesCoverUrl(seriesId: Long): String {
         val baseUrl = settingsStore.baseUrl.first()
-        return "$baseUrl/covers/series/$seriesId".replace("//", "/")
+        return ApiUrlBuilder.join(baseUrl, "covers/series/$seriesId")
     }
     
     /**

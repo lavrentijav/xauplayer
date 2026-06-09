@@ -60,6 +60,15 @@ object NetworkInterceptors {
                 return@Interceptor chain.proceed(originalRequest)
             }
             
+            // Если запрос уже идет на правильный хост (совпадает с baseUrl), не изменяем его
+            // Это важно для прямых запросов (например, скачивание файлов), которые используют полные URL
+            if (originalUrl.host == baseUrlHttpUrl.host && 
+                originalUrl.scheme == baseUrlHttpUrl.scheme && 
+                originalUrl.port == baseUrlHttpUrl.port) {
+                // URL уже указывает на правильный хост, пропускаем без изменений
+                return@Interceptor chain.proceed(originalRequest)
+            }
+            
             // Всегда заменяем scheme, host и port на значения из настроек
             // Это позволяет динамически менять сервер без перезапуска приложения
             val newUrl = originalUrl.newBuilder()

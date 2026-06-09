@@ -11,7 +11,7 @@ object AppConfig {
     // ========== API и сетевые настройки ==========
     
     /** URL API по умолчанию */
-    const val DEFAULT_API_BASE_URL = "https://api.xau.fire-core.ru/"
+    const val DEFAULT_API_BASE_URL = "https://api.xau.fire-core.ru/api/v1/"
     
     /** URL для обновлений по умолчанию (использует API endpoint /release) */
     const val DEFAULT_UPDATE_URL = "https://api.xau.fire-core.ru/release"

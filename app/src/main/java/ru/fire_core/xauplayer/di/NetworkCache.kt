@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import ru.fire_core.xauplayer.core.config.AppConfig
 import ru.fire_core.xauplayer.data.datastore.SettingsStore
+import ru.fire_core.xauplayer.data.network.ApiUrlBuilder
 import ru.fire_core.xauplayer.data.datastore.TokenStore
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
@@ -26,7 +28,7 @@ class NetworkCache @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     
     // Кэшированные значения с дефолтными значениями
-    private val _baseUrl = AtomicReference<String>("https://api.xau.fire-core.ru/")
+    private val _baseUrl = AtomicReference<String>(AppConfig.DEFAULT_API_BASE_URL)
     private val _accessToken = AtomicReference<String?>(null)
     private val _refreshToken = AtomicReference<String?>(null)
     private val _currentEmail = AtomicReference<String?>(null)
@@ -43,7 +45,7 @@ class NetworkCache @Inject constructor(
         scope.launch {
             Log.d("NetworkCache", "Загрузка начальных значений из DataStore...")
             try {
-                _baseUrl.set(settingsStore.baseUrl.first())
+                _baseUrl.set(ApiUrlBuilder.normalizeApiBaseUrl(settingsStore.baseUrl.first()))
                 Log.d("NetworkCache", "baseUrl загружен: ${_baseUrl.get()}")
             } catch (e: Exception) {
                 Log.w("NetworkCache", "Ошибка загрузки baseUrl: ${e.message}", e)
