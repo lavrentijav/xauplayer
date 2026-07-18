@@ -102,6 +102,18 @@
         <PersistentDeviceSelectionData>
           <option name="api" value="36" />
           <option name="brand" value="samsung" />
+          <option name="codename" value="SC-51C" />
+          <option name="id" value="SC-51C" />
+          <option name="labId" value="google" />
+          <option name="manufacturer" value="Samsung" />
+          <option name="name" value="Galaxy S22" />
+          <option name="screenDensity" value="480" />
+          <option name="screenX" value="1080" />
+          <option name="screenY" value="2340" />
+        </PersistentDeviceSelectionData>
+        <PersistentDeviceSelectionData>
+          <option name="api" value="36" />
+          <option name="brand" value="samsung" />
           <option name="codename" value="SC-53C" />
           <option name="id" value="SC-53C" />
           <option name="labId" value="google" />
@@ -437,6 +449,18 @@
           <option name="screenY" value="2340" />
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
+          <option name="api" value="34" />
+          <option name="brand" value="samsung" />
+          <option name="codename" value="a52xq" />
+          <option name="id" value="a52xq" />
+          <option name="labId" value="google" />
+          <option name="manufacturer" value="Samsung" />
+          <option name="name" value="Galaxy A52 5G" />
+          <option name="screenDensity" value="420" />
+          <option name="screenX" value="1080" />
+          <option name="screenY" value="2400" />
+        </PersistentDeviceSelectionData>
+        <PersistentDeviceSelectionData>
           <option name="api" value="35" />
           <option name="brand" value="samsung" />
           <option name="codename" value="a56x" />
@@ -580,11 +604,6 @@
           <option name="screenDensity" value="420" />
           <option name="screenX" value="1080" />
           <option name="screenY" value="2410" />
-          <option name="tags">
-            <list>
-              <option value="dda-default" />
-            </list>
-          </option>
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="32" />
@@ -1006,11 +1025,6 @@
           <option name="screenDensity" value="420" />
           <option name="screenX" value="1080" />
           <option name="screenY" value="2424" />
-          <option name="tags">
-            <list>
-              <option value="dda-default" />
-            </list>
-          </option>
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="34" />
@@ -1061,6 +1075,19 @@
           <option name="screenY" value="1920" />
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
+          <option name="api" value="36" />
+          <option name="brand" value="samsung" />
+          <option name="codename" value="gts10pwifi" />
+          <option name="formFactor" value="Tablet" />
+          <option name="id" value="gts10pwifi" />
+          <option name="labId" value="google" />
+          <option name="manufacturer" value="Samsung" />
+          <option name="name" value="Galaxy Tab S10+" />
+          <option name="screenDensity" value="320" />
+          <option name="screenX" value="1752" />
+          <option name="screenY" value="2800" />
+        </PersistentDeviceSelectionData>
+        <PersistentDeviceSelectionData>
           <option name="api" value="33" />
           <option name="brand" value="samsung" />
           <option name="codename" value="gts7lwifi" />
@@ -1083,6 +1110,18 @@
           <option name="screenDensity" value="340" />
           <option name="screenX" value="1600" />
           <option name="screenY" value="2560" />
+        </PersistentDeviceSelectionData>
+        <PersistentDeviceSelectionData>
+          <option name="api" value="33" />
+          <option name="brand" value="samsung" />
+          <option name="codename" value="gts7xlwifi" />
+          <option name="id" value="gts7xlwifi" />
+          <option name="labId" value="google" />
+          <option name="manufacturer" value="Samsung" />
+          <option name="name" value="Galaxy Tab S7+" />
+          <option name="screenDensity" value="340" />
+          <option name="screenX" value="1752" />
+          <option name="screenY" value="2800" />
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="33" />
@@ -1338,11 +1377,6 @@
           <option name="screenDensity" value="390" />
           <option name="screenX" value="1080" />
           <option name="screenY" value="2404" />
-          <option name="tags">
-            <list>
-              <option value="dda-default" />
-            </list>
-          </option>
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="34" />
@@ -1440,11 +1474,6 @@
           <option name="screenDensity" value="450" />
           <option name="screenX" value="1080" />
           <option name="screenY" value="2340" />
-          <option name="tags">
-            <list>
-              <option value="dda-default" />
-            </list>
-          </option>
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="36" />
@@ -1458,11 +1487,6 @@
           <option name="screenDensity" value="450" />
           <option name="screenX" value="1080" />
           <option name="screenY" value="2340" />
-          <option name="tags">
-            <list>
-              <option value="dda-default" />
-            </list>
-          </option>
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="33" />
@@ -1670,11 +1694,6 @@
           <option name="screenDensity" value="390" />
           <option name="screenX" value="2076" />
           <option name="screenY" value="2152" />
-          <option name="tags">
-            <list>
-              <option value="dda-default" />
-            </list>
-          </option>
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="30" />
@@ -1687,11 +1706,6 @@
           <option name="screenDensity" value="440" />
           <option name="screenX" value="1080" />
           <option name="screenY" value="2340" />
-          <option name="tags">
-            <list>
-              <option value="default" />
-            </list>
-          </option>
         </PersistentDeviceSelectionData>
         <PersistentDeviceSelectionData>
           <option name="api" value="34" />

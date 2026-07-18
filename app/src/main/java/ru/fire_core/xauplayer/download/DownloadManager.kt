@@ -105,7 +105,8 @@ class DownloadManager @Inject constructor(
                 val existing = db.downloadedChapterDao().getByChapterId(chapter.id)
                 if (existing != null && File(existing.localPath).exists()) {
                     logger.info("DownloadManager", "Chapter ${chapter.id} already downloaded, skipping")
-                    clearProgress(chapter.id)
+                    val size = existing.fileSize.takeIf { it > 0 } ?: chapter.fileSizeBytes ?: 0L
+                    markChapterCompleted(chapter.id, bookId, size)
                     activeDownloads.remove(chapter.id)
                     startNextDownload()
                     return@launch
@@ -201,7 +202,7 @@ class DownloadManager @Inject constructor(
                                 // Вычисляем общий прогресс загрузки книги
                                 val allProgress = _downloadProgress.value
                                 val bookProgresses = allProgress.values.filter { it.bookId == bookId }
-                                val totalDownloaded = bookProgresses.sumOf { it.downloadedBytes }
+                                val totalDownloaded = calculateTotalDownloadedBytes(bookId, bookProgresses)
                                 // Используем заранее посчитанный тотал, если есть, иначе суммируем из прогрессов
                                 val totalBookSize = bookTotalSizes[bookId] ?: bookProgresses.sumOf { it.totalBytes }
                                 
@@ -255,12 +256,10 @@ class DownloadManager @Inject constructor(
                         )
                         db.downloadedChapterDao().upsert(downloaded)
                         
-                        updateProgress(chapter.id, bookId, totalBytes, downloadedBytes, 0, DownloadState.COMPLETED, null)
+                        markChapterCompleted(chapter.id, bookId, totalBytes)
                         notificationHelper.showDownloadComplete(chapter.title)
                         activeDownloads.remove(chapter.id)
                         logger.info("DownloadManager", "Chapter ${chapter.id} downloaded successfully")
-                        // Убираем из карты прогресса — UI переключится на «скачано»
-                        clearProgress(chapter.id)
                         
                         // Проверяем, все ли главы книги скачаны, и обновляем статус
                         checkAndUpdateBookStatus(bookId)
@@ -345,6 +344,7 @@ class DownloadManager @Inject constructor(
                 
                 // Запускаем следующую загрузку из очереди
                 startNextDownload()
+                clearBookProgress(bookId)
             } catch (e: Exception) {
                 logger.error("DownloadManager", "Failed to cancel book download $bookId", e)
             }
@@ -372,9 +372,13 @@ class DownloadManager @Inject constructor(
                 val chapterSize = chapter.fileSizeBytes ?: existing?.fileSize ?: 0L
 
                 if (alreadyDownloaded) {
-                    clearProgress(chapter.id)
                     val size = chapterSize.takeIf { it > 0 } ?: existing!!.fileSize
-                    if (size > 0) totalBookSize += size
+                    if (size > 0) {
+                        markChapterCompleted(chapter.id, bookId, size)
+                        totalBookSize += size
+                    } else {
+                        clearProgress(chapter.id)
+                    }
                 } else {
                     if (chapterSize > 0) {
                         totalBookSize += chapterSize
@@ -401,7 +405,12 @@ class DownloadManager @Inject constructor(
                 if (existing == null || !File(existing.localPath).exists()) {
                     downloadChapter(chapter, bookId)
                 } else {
-                    clearProgress(chapter.id)
+                    val size = existing.fileSize.takeIf { it > 0 } ?: chapter.fileSizeBytes ?: 0L
+                    if (size > 0) {
+                        markChapterCompleted(chapter.id, bookId, size)
+                    } else {
+                        clearProgress(chapter.id)
+                    }
                 }
             }
         }
@@ -462,6 +471,7 @@ class DownloadManager @Inject constructor(
                     }
                 }
                 db.downloadedChapterDao().deleteByBookId(bookId)
+                clearBookProgress(bookId)
             } catch (e: Exception) {
                 logger.error("DownloadManager", "Failed to delete book $bookId", e)
             }
@@ -515,6 +525,35 @@ class DownloadManager @Inject constructor(
         val current = _downloadProgress.value.toMutableMap()
         current.remove(chapterId)
         _downloadProgress.value = current
+    }
+
+    private fun clearBookProgress(bookId: Long) {
+        val current = _downloadProgress.value.toMutableMap()
+        current.entries.removeIf { it.value.bookId == bookId }
+        _downloadProgress.value = current
+        bookTotalSizes.remove(bookId)
+    }
+
+    private fun markChapterCompleted(chapterId: Long, bookId: Long, totalBytes: Long) {
+        val size = totalBytes.coerceAtLeast(0L)
+        updateProgress(chapterId, bookId, size, size, 0, DownloadState.COMPLETED, null)
+    }
+
+    private suspend fun calculateTotalDownloadedBytes(
+        bookId: Long,
+        bookProgresses: List<DownloadProgress>
+    ): Long {
+        val progressChapterIds = bookProgresses.map { it.chapterId }.toSet()
+        val fromProgress = bookProgresses.sumOf { p ->
+            when (p.state) {
+                DownloadState.COMPLETED -> p.totalBytes.takeIf { it > 0 } ?: p.downloadedBytes
+                else -> p.downloadedBytes
+            }
+        }
+        val fromDb = db.downloadedChapterDao().getByBookId(bookId)
+            .filter { it.chapterId !in progressChapterIds && File(it.localPath).exists() }
+            .sumOf { it.fileSize }
+        return fromProgress + fromDb
     }
 
     suspend fun isBookFullyDownloaded(chapters: List<Chapter>): Boolean {

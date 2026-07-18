@@ -783,6 +783,9 @@ fun FullScreenPlayerContent(
                                             when (p?.state) {
                                                 ru.fire_core.xauplayer.download.DownloadState.COMPLETED ->
                                                     p.totalBytes.takeIf { it > 0 } ?: (ch.fileSizeBytes ?: 0L)
+                                                ru.fire_core.xauplayer.download.DownloadState.DOWNLOADING,
+                                                ru.fire_core.xauplayer.download.DownloadState.QUEUED ->
+                                                    p.downloadedBytes
                                                 else -> p?.downloadedBytes ?: 0L
                                             }
                                         }
@@ -803,14 +806,14 @@ fun FullScreenPlayerContent(
                                 val downloadedMB = (totalDownloaded.toDouble() / ru.fire_core.xauplayer.core.config.AppConfig.BYTES_PER_MB).toInt()
                                 val totalMB = (totalSize.toDouble() / ru.fire_core.xauplayer.core.config.AppConfig.BYTES_PER_MB).toInt()
                                 val label = when {
-                                    isBookDownloading && totalMB > 0 -> "$downloadedMB/$totalMB Мб"
+                                    (isBookDownloading || isBookQueued) && totalMB > 0 -> "$downloadedMB/$totalMB Мб"
                                     isBookDownloading -> "Загрузка..."
                                     totalMB > 0 -> "$totalMB Мб"
                                     else -> "В очереди"
                                 }
                                 DownloadProgressControl(
                                     label = label,
-                                    progress = if (isBookDownloading && totalSize > 0) progress else null,
+                                    progress = if ((isBookDownloading || isBookQueued) && totalSize > 0) progress else null,
                                     onCancel = {
                                         scope.launch { vm.cancelBookDownload(selectedBook.id) }
                                     },
