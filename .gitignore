@@ -49,4 +49,9 @@ venv/
 *.log
 node_modules/
 
-**/build/ **/.gradle/ *.apk *.aab local.properties
+**/build/
+**/.gradle/
+.gradle/
+*.apk
+*.aab
+local.properties
