@@ -15,6 +15,35 @@ object AppConfig {
     
     /** URL для обновлений по умолчанию (использует API endpoint /release) */
     const val DEFAULT_UPDATE_URL = "https://api.xau.fire-core.ru/release"
+
+
+    // ========== Оффлайн-режим и служебный аккаунт ==========
+
+    /**
+     * Email служебного (сервисного) аккаунта приложения.
+     * Когда активен этот аккаунт, сетевой слой перехватывает запросы к серверу
+     * и эмулирует положительные ответы, позволяя слушать уже скачанный контент
+     * без доступа к серверу и с истёкшими сессиями.
+     */
+    const val SERVICE_ACCOUNT_EMAIL = "offline@xauplayer.local"
+
+    /** Отображаемое имя служебного аккаунта */
+    const val SERVICE_ACCOUNT_NAME = "Оффлайн-режим"
+
+    /** Access-токен служебного аккаунта (используется как маркер оффлайн-режима) */
+    const val SERVICE_ACCESS_TOKEN = "offline-service-access-token"
+
+    /** Refresh-токен служебного аккаунта */
+    const val SERVICE_REFRESH_TOKEN = "offline-service-refresh-token"
+
+    /** Через сколько дней по умолчанию истекает локальная сессия */
+    const val DEFAULT_SESSION_EXPIRY_DAYS = 30
+
+    /** Минимально допустимое время жизни сессии (дни) */
+    const val MIN_SESSION_EXPIRY_DAYS = 1
+
+    /** Максимально допустимое время жизни сессии (дни) */
+    const val MAX_SESSION_EXPIRY_DAYS = 365
     
     /** Интервал проверки обновлений (24 часа) */
     const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L

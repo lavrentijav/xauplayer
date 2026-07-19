@@ -21,6 +21,25 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    // Конфигурация подписи релизного APK.
+    // Ключ передаётся через переменные окружения (используется в GitHub Actions):
+    //   KEYSTORE_FILE     — путь к .jks/.keystore файлу
+    //   KEYSTORE_PASSWORD — пароль хранилища
+    //   KEY_ALIAS         — алиас ключа
+    //   KEY_PASSWORD      — пароль ключа
+    // Если переменные не заданы, релизная подпись пропускается (собирается unsigned APK).
+    signingConfigs {
+        create("release") {
+            val keystoreFile = System.getenv("KEYSTORE_FILE")
+            if (!keystoreFile.isNullOrBlank() && file(keystoreFile).exists()) {
+                storeFile = file(keystoreFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -28,6 +47,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Применяем подпись только если keystore действительно доступен
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile != null) {
+                signingConfig = releaseSigning
+            }
         }
         debug {
             isMinifyEnabled = false

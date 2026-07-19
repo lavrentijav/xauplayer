@@ -17,6 +17,7 @@ import ru.fire_core.xauplayer.domain.usecase.auth.LoginUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.SaveTokensUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.RegisterUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.SelectAccountUseCase
+import ru.fire_core.xauplayer.domain.usecase.auth.EnterServiceAccountUseCase
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import javax.inject.Inject
 
@@ -30,6 +31,7 @@ class AuthViewModel @Inject constructor(
     private val getSavedAccounts: GetSavedAccountsUseCase,
     private val selectAccount: SelectAccountUseCase,
     private val deleteAccount: DeleteAccountUseCase,
+    private val enterServiceAccount: EnterServiceAccountUseCase,
     private val accountRepo: AccountRepository,
     private val logger: AppLogger
 ) : ViewModel() {
@@ -122,6 +124,23 @@ class AuthViewModel @Inject constructor(
     fun deleteSavedAccount(email: String) = viewModelScope.launch {
         deleteAccount(email)
         loadSavedAccounts()
+    }
+
+    /**
+     * Вход в служебный (оффлайн) аккаунт для прослушивания скачанного контента
+     * без доступа к серверу (Req 4).
+     */
+    fun enterOfflineMode() = viewModelScope.launch {
+        _state.value = AuthState.Loading
+        try {
+            logger.info("AuthViewModel", "Entering offline service account")
+            enterServiceAccount()
+            loadSavedAccounts()
+            _state.value = AuthState.Success
+        } catch (e: Exception) {
+            logger.error("AuthViewModel", "Failed to enter offline service account", e)
+            _state.value = AuthState.Error(e.message ?: "Не удалось войти в оффлайн-режим")
+        }
     }
 }
 

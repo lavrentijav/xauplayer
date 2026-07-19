@@ -32,3 +32,11 @@ class LogoutUseCase @Inject constructor(private val repo: AuthRepository) {
     suspend operator fun invoke(saveAccount: Boolean = false) = repo.logout(saveAccount)
 }
 
+class EnterServiceAccountUseCase @Inject constructor(private val repo: AuthRepository) {
+    suspend operator fun invoke() = repo.enterServiceAccount()
+}
+
+class RefreshSessionUseCase @Inject constructor(private val repo: AuthRepository) {
+    suspend operator fun invoke(): Boolean = repo.refreshSession()
+}
+

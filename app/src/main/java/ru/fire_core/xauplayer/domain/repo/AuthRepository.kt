@@ -23,6 +23,17 @@ interface AuthRepository {
     suspend fun selectAccount(email: String): Boolean
     suspend fun deleteAccount(email: String)
     suspend fun logout(saveAccount: Boolean = false)
+
+    /** Активен ли служебный (оффлайн) аккаунт */
+    suspend fun isServiceAccount(): Boolean
+    /** Вход в служебный аккаунт для прослушивания скачанного контента без сервера */
+    suspend fun enterServiceAccount()
+    /** Выход из служебного аккаунта в последний реальный аккаунт (если возможно) */
+    suspend fun exitServiceAccount(): Boolean
+    /** Ручное обновление сессии (кнопка «Обновить сессию»). Возвращает true при успехе/локальном продлении */
+    suspend fun refreshSession(): Boolean
+    /** Переключение оффлайн-режима: автовход в служебный аккаунт или возврат в реальный */
+    suspend fun setOfflineMode(enabled: Boolean)
 }
 
 class AuthRepositoryImpl @Inject constructor(
@@ -59,7 +70,13 @@ class AuthRepositoryImpl @Inject constructor(
         try {
             val refresh = tokenStore.refreshToken.first()
             if (refresh.isNullOrBlank()) return false
-            
+
+            // Служебный аккаунт: сессия продлевается локально, без обращения к серверу
+            if (refresh == ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_REFRESH_TOKEN) {
+                settingsStore.setLastSessionRenew(System.currentTimeMillis())
+                return true
+            }
+
             val response = api.refresh(RefreshRequest(refresh))
             val email = tokenStore.currentEmail.first()
             if (email != null) {
@@ -146,6 +163,90 @@ class AuthRepositoryImpl @Inject constructor(
 
     override suspend fun deleteAccount(email: String) {
         db.savedAccountDao().delete(email)
+    }
+
+    override suspend fun isServiceAccount(): Boolean {
+        val email = tokenStore.currentEmail.first()
+        val access = tokenStore.accessToken.first()
+        return email == ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL ||
+            access == ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCESS_TOKEN
+    }
+
+    override suspend fun enterServiceAccount() {
+        val email = ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL
+        // Устанавливаем токены служебного аккаунта — маркер оффлайн-режима для интерцепторов
+        tokenStore.setCurrentEmail(email)
+        tokenStore.save(
+            ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCESS_TOKEN,
+            ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_REFRESH_TOKEN,
+            0,
+            email
+        )
+        // Сохраняем служебный аккаунт в списке (без пароля)
+        db.savedAccountDao().upsert(
+            SavedAccount(
+                email = email,
+                name = ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_NAME,
+                userId = 0,
+                lastLogin = System.currentTimeMillis(),
+                accessToken = ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCESS_TOKEN,
+                refreshToken = ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_REFRESH_TOKEN,
+                passwordHash = null
+            )
+        )
+        settingsStore.setLastSessionRenew(System.currentTimeMillis())
+    }
+
+    override suspend fun exitServiceAccount(): Boolean {
+        val serviceEmail = ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL
+        val lastReal = db.savedAccountDao().getAll()
+            .filter { it.email != serviceEmail }
+            .maxByOrNull { it.lastLogin }
+
+        if (lastReal != null && !lastReal.accessToken.isNullOrBlank() && !lastReal.refreshToken.isNullOrBlank()) {
+            tokenStore.setCurrentEmail(lastReal.email)
+            tokenStore.save(lastReal.accessToken!!, lastReal.refreshToken!!, 0, lastReal.email)
+            return true
+        }
+        // Нет реального аккаунта с токенами — требуется вход
+        ru.fire_core.xauplayer.core.auth.AuthManager.requestLogin(lastReal?.email)
+        return false
+    }
+
+    override suspend fun refreshSession(): Boolean {
+        // В служебном/оффлайн-режиме продлеваем сессию локально
+        if (isServiceAccount() || settingsStore.getOfflineMode()) {
+            settingsStore.setLastSessionRenew(System.currentTimeMillis())
+            return true
+        }
+        // Пытаемся обновить токен на сервере
+        val ok = refreshToken()
+        if (ok) {
+            settingsStore.setLastSessionRenew(System.currentTimeMillis())
+            return true
+        }
+        // Сервер недоступен — при включённой опции продлеваем сессию локально (Req 2)
+        if (settingsStore.getSkipRefreshWhenOffline()) {
+            settingsStore.setLastSessionRenew(System.currentTimeMillis())
+            return true
+        }
+        return false
+    }
+
+    override suspend fun setOfflineMode(enabled: Boolean) {
+        settingsStore.setOfflineMode(enabled)
+        if (enabled) {
+            // Req 7: автовход в служебный аккаунт с доступом к скачанному.
+            // Токены предыдущего аккаунта остаются в SavedAccount, запросы буферизуются.
+            if (!isServiceAccount()) {
+                enterServiceAccount()
+            }
+        } else {
+            // Возврат в реальный аккаунт
+            if (isServiceAccount()) {
+                exitServiceAccount()
+            }
+        }
     }
 
     override suspend fun logout(saveAccount: Boolean) {

@@ -13,7 +13,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val settingsStore: SettingsStore
+    private val settingsStore: SettingsStore,
+    private val authRepository: ru.fire_core.xauplayer.domain.repo.AuthRepository
 ) : ViewModel() {
 
     val baseUrl: StateFlow<String> = settingsStore.baseUrl.stateIn(
@@ -117,6 +118,28 @@ class SettingsViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(AppConfig.STATE_FLOW_SUBSCRIPTION_TIMEOUT_MS),
         initialValue = true // По умолчанию используем системный MediaStyle
     )
+
+    val offlineMode: StateFlow<Boolean> = settingsStore.offlineMode.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(AppConfig.STATE_FLOW_SUBSCRIPTION_TIMEOUT_MS),
+        initialValue = false
+    )
+
+    val sessionExpiryDays: StateFlow<Int> = settingsStore.sessionExpiryDays.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(AppConfig.STATE_FLOW_SUBSCRIPTION_TIMEOUT_MS),
+        initialValue = AppConfig.DEFAULT_SESSION_EXPIRY_DAYS
+    )
+
+    val skipRefreshWhenOffline: StateFlow<Boolean> = settingsStore.skipRefreshWhenOffline.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(AppConfig.STATE_FLOW_SUBSCRIPTION_TIMEOUT_MS),
+        initialValue = true
+    )
+
+    /** Результат последнего обновления сессии: null — не запускалось, true/false — успех/ошибка */
+    private val _sessionRefreshResult = kotlinx.coroutines.flow.MutableStateFlow<Boolean?>(null)
+    val sessionRefreshResult: StateFlow<Boolean?> = _sessionRefreshResult
 
     fun setBaseUrl(url: String) {
         require(url.isNotBlank()) { "URL cannot be blank" }
@@ -222,6 +245,44 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsStore.setUseSystemMediaPlayer(enabled)
         }
+    }
+
+    /** Переключение оффлайн-режима (Req 7) */
+    fun setOfflineMode(enabled: Boolean) {
+        viewModelScope.launch {
+            authRepository.setOfflineMode(enabled)
+        }
+    }
+
+    /** Установка времени истечения сессии в днях (Req 6) */
+    fun setSessionExpiryDays(days: Int) {
+        viewModelScope.launch {
+            settingsStore.setSessionExpiryDays(days)
+        }
+    }
+
+    /** Не пытаться обновлять сессию без доступа к серверу (Req 2) */
+    fun setSkipRefreshWhenOffline(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setSkipRefreshWhenOffline(enabled)
+        }
+    }
+
+    /** Ручное обновление сессии (Req 5) */
+    fun refreshSession() {
+        viewModelScope.launch {
+            _sessionRefreshResult.value = null
+            val ok = try {
+                authRepository.refreshSession()
+            } catch (e: Exception) {
+                false
+            }
+            _sessionRefreshResult.value = ok
+        }
+    }
+
+    fun clearSessionRefreshResult() {
+        _sessionRefreshResult.value = null
     }
 }
 

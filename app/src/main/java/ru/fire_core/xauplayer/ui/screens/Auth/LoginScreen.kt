@@ -204,14 +204,32 @@ fun LoginScreen(
                 else Text("Войти")
             }
             
-            error?.let { 
+            error?.let {
                 Text(
-                    it, 
+                    it,
                     color = Color.Red,
                     modifier = Modifier.padding(top = 8.dp)
-                ) 
+                )
             }
         }
+
+        // Оффлайн-режим: вход в служебный аккаунт для прослушивания скачанного (Req 4)
+        HorizontalDivider(
+            modifier = Modifier.padding(vertical = 8.dp),
+            color = Color(0xFF1A4A3A)
+        )
+        OutlinedButton(
+            onClick = { viewModel.enterOfflineMode() },
+            enabled = !loading,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Слушать оффлайн (без входа)", color = Color.White)
+        }
+        Text(
+            "Служебный аккаунт даёт доступ к уже скачанным книгам без интернета и сервера.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray
+        )
     }
 }
 
