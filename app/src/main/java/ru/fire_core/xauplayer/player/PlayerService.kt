@@ -142,38 +142,39 @@ class PlayerService : MediaSessionService() {
             // MediaSession активируется автоматически при создании через Builder
             mediaSession = MediaSession.Builder(this, player).build()
 
-            // PlayerNotificationManager из Media3 автоматически создаёт правильные MediaStyle уведомления
-            // которые отображаются в шторке, на экране блокировки, в Android Auto, на умных часах и т.д.
-            // Это стандартный способ интеграции аудио-плеера с системой Android
-            notificationManager = PlayerNotificationManager.Builder(
-                this,
-                NOTIFICATION_ID,
-                channelId
-            ).apply {
-                setMediaDescriptionAdapter(MediaDescriptionAdapter())
-                setNotificationListener(NotificationListener())
-            }.build().apply {
-                // Приоритет уведомления управляется через NotificationChannel (уже настроен в createNotificationChannel)
-                
-                // Включаем стандартные действия медиа-плеера для системной интеграции
-                // Эти действия работают в шторке, на экране блокировки, в Android Auto и т.д.
-                setUsePlayPauseActions(true)
-                setUseStopAction(false)
-                // Включаем кнопки перемотки - они будут перематывать на 15 секунд
-                setUseFastForwardAction(true)
-                setUseRewindAction(true)
-                // Включаем кнопки следующей/предыдущей главы для гарнитуры и системных контролов
-                setUseNextAction(true)
-                setUsePreviousAction(true)
-                
-                // PlayerNotificationManager автоматически создаёт MediaStyle уведомление
-                // которое правильно интегрируется с системой Android
-                // MediaStyle уведомления отображаются как стандартные системные медиа-уведомления
-                // Устанавливаем плеер ПОСЛЕ настройки менеджера
-                setPlayer(player)
+            if (useSystemMediaPlayer) {
+                // СИСТЕМНЫЙ режим: полагаемся на встроенное уведомление MediaSessionService.
+                // Оно связано с MediaSession и потому появляется в системных медиа-контролах
+                // («сейчас играет» / шторка / экран блокировки). Задаём тот же id и канал,
+                // что и у стартового foreground-уведомления, чтобы оно заменилось, а не
+                // дублировалось. PlayerNotificationManager в этом режиме НЕ создаём.
+                setMediaNotificationProvider(
+                    androidx.media3.session.DefaultMediaNotificationProvider.Builder(this)
+                        .setNotificationId(NOTIFICATION_ID)
+                        .setChannelId(channelId)
+                        .build()
+                )
+                logger.info("PlayerService", "MediaSession: системное уведомление (DefaultMediaNotificationProvider)")
+            } else {
+                // Кастомный режим: собственное MediaStyle-уведомление через PlayerNotificationManager.
+                notificationManager = PlayerNotificationManager.Builder(
+                    this,
+                    NOTIFICATION_ID,
+                    channelId
+                ).apply {
+                    setMediaDescriptionAdapter(MediaDescriptionAdapter())
+                    setNotificationListener(NotificationListener())
+                }.build().apply {
+                    setUsePlayPauseActions(true)
+                    setUseStopAction(false)
+                    setUseFastForwardAction(true)
+                    setUseRewindAction(true)
+                    setUseNextAction(true)
+                    setUsePreviousAction(true)
+                    setPlayer(player)
+                }
+                logger.info("PlayerService", "MediaSession: кастомное уведомление (PlayerNotificationManager)")
             }
-            
-            logger.info("PlayerService", "MediaSession настроен для системной интеграции (MediaStyle уведомления)")
             
         } catch (e: Exception) {
             logger.error("PlayerService", "Error setting up media session: ${e.message}", e)
