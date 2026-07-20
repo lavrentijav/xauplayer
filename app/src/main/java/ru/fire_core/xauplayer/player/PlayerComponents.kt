@@ -53,8 +53,27 @@ class PlayerHolder @Inject constructor(
         .build()
     
     private var playerListener: Player.Listener? = null
-    
+
+    // Явно задаём аудио-сессию плеера, чтобы эквалайзер мог прикрепиться именно к ней.
+    private var _audioSessionId: Int = 0
+
+    /** ID аудио-сессии, на которую выводит звук плеер (для эквалайзера). */
+    fun audioSessionId(): Int = _audioSessionId
+
     init {
+        // Задаём стабильный audio session id для ExoPlayer (нужно эквалайзеру)
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val sid = am.generateAudioSessionId()
+            if (sid != android.media.AudioManager.ERROR && sid != 0) {
+                exo.setAudioSessionId(sid)
+                _audioSessionId = sid
+                logger.info("PlayerHolder", "Player audio session id set: $sid")
+            }
+        } catch (e: Exception) {
+            logger.warn("PlayerHolder", "Failed to set audio session id: ${e.message}", e)
+        }
+
         // Добавляем обработчик ошибок для автоматического retry
         playerListener = object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {

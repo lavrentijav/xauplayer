@@ -164,16 +164,17 @@ class PlayerViewModel @Inject constructor(
         positionUpdateJob?.cancel()
         val player = holder.player()
         positionUpdateJob = viewModelScope.launch {
-            // Получаем интервал обновления из настроек
-            val updateInterval = settingsStore.positionUpdateInterval.first()
+            // Для плавного ползунка используем частый фиксированный интервал (не из настроек):
+            // это только чтение позиции и обновление StateFlow, без ввода-вывода.
+            val updateInterval = ru.fire_core.xauplayer.core.config.AppConfig.UI_POSITION_POLL_INTERVAL_MS
             while (true) {
                 try {
                     // Обновляем только если играет - экономия батареи
                     if (!player.isPlaying) {
-                        delay(updateInterval.toLong()) // Используем интервал из настроек
+                        delay(updateInterval) // Плавный интервал UI
                         continue
                     }
-                    delay(updateInterval.toLong()) // Используем интервал из настроек
+                    delay(updateInterval) // Плавный интервал UI
                     val currentPos = player.currentPosition
                     val dur = player.duration
                     if (dur != C.TIME_UNSET && currentPos != C.TIME_UNSET) {
@@ -261,9 +262,27 @@ class PlayerViewModel @Inject constructor(
                 // Продолжаем попытки - ExoPlayer делает это автоматически
             }
 
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                // Используем РЕАЛЬНОЕ состояние воспроизведения (не намерение playWhenReady),
+                // чтобы кнопка play/pause и ползунок совпадали со звуком.
+                _uiState.value = _uiState.value.copy(isPlaying = isPlaying)
+                if (isPlaying) {
+                    // Перезапускаем плавные обновления позиции и сразу подтягиваем позицию
+                    startPositionUpdates()
+                    val pos = player.currentPosition
+                    val dur = player.duration
+                    if (pos != C.TIME_UNSET) {
+                        _uiState.value = _uiState.value.copy(
+                            currentPosition = pos,
+                            duration = if (dur != C.TIME_UNSET) dur else _uiState.value.duration
+                        )
+                    }
+                }
+            }
+
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                _uiState.value = _uiState.value.copy(isPlaying = playWhenReady)
-                // Перезапускаем обновления позиции при изменении состояния воспроизведения
+                // Намерение играть: обновляем позицию, но состояние isPlaying берём из
+                // onIsPlayingChanged (реальное воспроизведение).
                 if (playWhenReady) {
                     startPositionUpdates()
                 }
