@@ -140,8 +140,7 @@ class PlayerService : MediaSessionService() {
             // Создаем MediaSession - кнопки гарнитуры обрабатываются автоматически через Player
             // MediaSession автоматически интегрируется с системой Android
             // MediaSession активируется автоматически при создании через Builder
-            val session = MediaSession.Builder(this, player).build()
-            mediaSession = session
+            mediaSession = MediaSession.Builder(this, player).build()
 
             // PlayerNotificationManager из Media3 автоматически создаёт правильные MediaStyle уведомления
             // которые отображаются в шторке, на экране блокировки, в Android Auto, на умных часах и т.д.
@@ -172,18 +171,6 @@ class PlayerService : MediaSessionService() {
                 // MediaStyle уведомления отображаются как стандартные системные медиа-уведомления
                 // Устанавливаем плеер ПОСЛЕ настройки менеджера
                 setPlayer(player)
-
-                // КЛЮЧЕВОЕ: привязываем уведомление к MediaSession токеном.
-                // Без этого MediaStyle-уведомление не связано с сессией и НЕ появляется
-                // в системных медиа-контролах (шторка/«сейчас играет»/экран блокировки).
-                // Привязку делаем при включённом «системном» режиме (useSystemMediaPlayer).
-                if (useSystemMediaPlayer) {
-                    try {
-                        setMediaSessionToken(session.sessionCompatToken)
-                    } catch (e: Exception) {
-                        logger.warn("PlayerService", "Failed to set media session token: ${e.message}", e)
-                    }
-                }
             }
             
             logger.info("PlayerService", "MediaSession настроен для системной интеграции (MediaStyle уведомления)")
