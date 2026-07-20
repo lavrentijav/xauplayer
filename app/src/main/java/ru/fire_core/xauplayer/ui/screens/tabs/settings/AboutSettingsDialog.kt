@@ -25,6 +25,9 @@ fun AboutSettingsDialog(
     // Пасхалка: считаем нажатия на версию
     var versionTaps by remember { mutableStateOf(0) }
     val tapMessage = ru.fire_core.xauplayer.core.humor.FunPhrases.versionTap(versionTaps)
+    // Пасхалка «стань разработчиком» — нажатия на номер сборки (как в Android)
+    var buildTaps by remember { mutableStateOf(0) }
+    val buildTapMessage = ru.fire_core.xauplayer.core.humor.FunPhrases.buildNumberTap(buildTaps)
     // Случайная отсылка на фильмы/сериалы/аниме (выбирается один раз при открытии)
     val reference = remember { ru.fire_core.xauplayer.core.humor.FunPhrases.aboutReference() }
     Dialog(
@@ -72,6 +75,15 @@ fun AboutSettingsDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
+                // Номер сборки — тыкаем, чтобы «стать разработчиком» (как в Android)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Номер сборки: ${ru.fire_core.xauplayer.BuildConfig.VERSION_CODE}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { buildTaps++ }
+                )
+
                 // Прикольная отсылка
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -80,8 +92,8 @@ fun AboutSettingsDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // Пасхалка с нажатиями на версию
-                tapMessage?.let { msg ->
+                // Пасхалки с нажатиями (на версию и на номер сборки)
+                (tapMessage ?: buildTapMessage)?.let { msg ->
                     Spacer(modifier = Modifier.height(12.dp))
                     Card(
                         modifier = Modifier.fillMaxWidth(),

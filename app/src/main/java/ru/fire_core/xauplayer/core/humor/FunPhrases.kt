@@ -85,10 +85,41 @@ object FunPhrases {
         "#000000" to "Тьма. Только тьма. И немного драмы.",
         "#FFFFFF" to "Чистый лист. Как тетрадь до первого имени...",
         "#FF00FF" to "Кислотный вайб. Кто-то тут фанат синтвейва.",
-        "#FFD700" to "Золото. «Голд Экспириенс», не иначе."
+        "#FFD700" to "Золото. «Голд Экспириенс», не иначе.",
+        // Цвет фона иконки приложения (дефолтный шаблон Android)
+        "#3DDC84" to "Это же цвет иконки приложения. Не подражай — будь собой."
     )
+
+    /** Отсылки на цвета. Оранжевый — цвет fire-core group. */
     fun colorEasterEgg(hex: String): String? {
-        return colorEggs[hex.uppercase()]
+        val key = hex.uppercase()
+        colorEggs[key]?.let { return it }
+        // Оранжевый в любом оттенке — «да ты ценитель»
+        val hsv = hexToHsv(key) ?: return null
+        val (h, s, v) = hsv
+        if (h in 18f..45f && s >= 0.5f && v >= 0.5f) {
+            return "Оранжевый... да ты ценитель. Это цвет fire-core group. 🔥"
+        }
+        return null
+    }
+
+    /** Парсит #RRGGBB в (hue[0..360], saturation[0..1], value[0..1]) или null. */
+    private fun hexToHsv(hex: String): Triple<Float, Float, Float>? {
+        val m = Regex("^#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$").find(hex) ?: return null
+        val r = m.groupValues[1].toInt(16) / 255f
+        val g = m.groupValues[2].toInt(16) / 255f
+        val b = m.groupValues[3].toInt(16) / 255f
+        val max = maxOf(r, g, b)
+        val min = minOf(r, g, b)
+        val delta = max - min
+        val h = when {
+            delta == 0f -> 0f
+            max == r -> 60f * (((g - b) / delta) % 6f)
+            max == g -> 60f * (((b - r) / delta) + 2f)
+            else -> 60f * (((r - g) / delta) + 4f)
+        }.let { if (it < 0f) it + 360f else it }
+        val s = if (max == 0f) 0f else delta / max
+        return Triple(h, s, max)
     }
 
     // ===== Пасхалка: многократное нажатие на версию =====
@@ -102,6 +133,16 @@ object FunPhrases {
         15 -> "Ну может, на 100-й раз что-то будет?"
         50 -> "Половина пути до 100. Ещё не поздно заняться делом."
         100 -> "Нуу... поздравляю тебя с бездарно потраченными несколькими минутами. Ачивка «Задрот-тыкальщик» получена. 🏆"
+        else -> null
+    }
+
+    /**
+     * Пасхалка «стань разработчиком» — как в Android, где тыкают по номеру сборки.
+     * Обратный отсчёт показывается только на последних нажатиях, а не на каждом.
+     */
+    fun buildNumberTap(count: Int): String? = when {
+        count in 3..6 -> "Вы уже почти разработчик! Осталось ${7 - count} нажатий."
+        count == 7 -> "Поздравляем, теперь вы разработчик! ...шучу. Ничего не разблокировалось. 🧑‍💻"
         else -> null
     }
 
