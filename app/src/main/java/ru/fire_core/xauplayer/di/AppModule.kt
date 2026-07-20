@@ -78,6 +78,8 @@ object AppModule {
             .cache(cache)
             // Base URL interceptor должен быть первым, чтобы изменять URL перед другими interceptors
             .addInterceptor(NetworkInterceptors.createBaseUrlInterceptor(networkCache))
+            // Оффлайн-интерцептор: эмулирует ответы сервера в служебном/оффлайн-режиме
+            .addInterceptor(NetworkInterceptors.createOfflineInterceptor(networkCache))
             .addInterceptor(NetworkInterceptors.createLoggingInterceptor())
             .addInterceptor(NetworkInterceptors.createAuthInterceptor(networkCache))
             .addInterceptor(NetworkInterceptors.createAuthErrorInterceptor(networkCache, tokenStore, settingsStore, logger, httpLogger, null))

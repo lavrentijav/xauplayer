@@ -34,6 +34,7 @@ fun SettingsTab(
     var showBufferSettings by remember { mutableStateOf(false) }
     var showAppearanceSettings by remember { mutableStateOf(false) }
     var showDebugSettings by remember { mutableStateOf(false) }
+    var showSecuritySettings by remember { mutableStateOf(false) }
     var showDevicesSettings by remember { mutableStateOf(false) }
     var showAboutSettings by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
@@ -128,6 +129,12 @@ fun SettingsTab(
                             title = "Воспроизведение",
                             description = "Авто скачивание, авто удаление",
                             onClick = { showPlaybackSettings = true }
+                        )
+
+                        SettingsButton(
+                            title = "Безопасность",
+                            description = "Оффлайн-режим, сессия, истечение сессии",
+                            onClick = { showSecuritySettings = true }
                         )
                     }
                     SettingsCategory.PLAYBACK -> {
@@ -230,6 +237,13 @@ fun SettingsTab(
                 viewModel = viewModel,
                 onDismiss = { showDebugSettings = false },
                 onShowLogs = { showLogsScreen = true }
+            )
+        }
+
+        if (showSecuritySettings) {
+            SecuritySettingsDialog(
+                viewModel = viewModel,
+                onDismiss = { showSecuritySettings = false }
             )
         }
 

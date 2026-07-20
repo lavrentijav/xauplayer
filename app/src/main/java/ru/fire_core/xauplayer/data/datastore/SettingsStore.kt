@@ -44,6 +44,10 @@ class SettingsStore(private val context: Context) {
     private val keyMaxDownloadSpeed = intPreferencesKey("max_download_speed") // Максимальная скорость загрузки в KB/s (0 = без ограничений)
     private val keyMaxConcurrentDownloads = intPreferencesKey("max_concurrent_downloads") // Максимальное количество параллельных загрузок
     private val keyUseSystemMediaPlayer = booleanPreferencesKey("use_system_media_player") // Использовать системный MediaStyle уведомление (по умолчанию true)
+    private val keyOfflineMode = booleanPreferencesKey("offline_mode") // Оффлайн-режим: автовход в служебный аккаунт, буферизация запросов
+    private val keySessionExpiryDays = intPreferencesKey("session_expiry_days") // Через сколько дней истекает локальная сессия
+    private val keySkipRefreshWhenOffline = booleanPreferencesKey("skip_refresh_when_offline") // Не пытаться обновлять сессию без доступа к серверу
+    private val keyLastSessionRenew = longPreferencesKey("last_session_renew") // Время последнего локального продления сессии
 
     val baseUrl: Flow<String> = context.settingsDataStore.data.map {
         ApiUrlBuilder.normalizeApiBaseUrl(
@@ -133,6 +137,26 @@ class SettingsStore(private val context: Context) {
     
     val useSystemMediaPlayer: Flow<Boolean> = context.settingsDataStore.data.map {
         it[keyUseSystemMediaPlayer] ?: true // По умолчанию используем системный MediaStyle
+    }
+
+    /** Оффлайн-режим: приложение автоматически входит в служебный аккаунт */
+    val offlineMode: Flow<Boolean> = context.settingsDataStore.data.map {
+        it[keyOfflineMode] ?: false
+    }
+
+    /** Через сколько дней истекает локальная сессия (параметр безопасности) */
+    val sessionExpiryDays: Flow<Int> = context.settingsDataStore.data.map {
+        it[keySessionExpiryDays] ?: ru.fire_core.xauplayer.core.config.AppConfig.DEFAULT_SESSION_EXPIRY_DAYS
+    }
+
+    /** Не пытаться обновлять сессию без доступа к серверу (локальное продление) */
+    val skipRefreshWhenOffline: Flow<Boolean> = context.settingsDataStore.data.map {
+        it[keySkipRefreshWhenOffline] ?: true
+    }
+
+    /** Время последнего локального продления сессии */
+    val lastSessionRenew: Flow<Long> = context.settingsDataStore.data.map {
+        it[keyLastSessionRenew] ?: 0L
     }
 
     val basepath: File = context.filesDir
@@ -341,6 +365,51 @@ class SettingsStore(private val context: Context) {
         context.settingsDataStore.edit { preferences ->
             preferences[keyUseSystemMediaPlayer] = enabled
         }
+    }
+
+    suspend fun setOfflineMode(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[keyOfflineMode] = enabled
+        }
+    }
+
+    suspend fun getOfflineMode(): Boolean {
+        return context.settingsDataStore.data.first()[keyOfflineMode] ?: false
+    }
+
+    suspend fun setSessionExpiryDays(days: Int) {
+        val clamped = days.coerceIn(
+            ru.fire_core.xauplayer.core.config.AppConfig.MIN_SESSION_EXPIRY_DAYS,
+            ru.fire_core.xauplayer.core.config.AppConfig.MAX_SESSION_EXPIRY_DAYS
+        )
+        context.settingsDataStore.edit { preferences ->
+            preferences[keySessionExpiryDays] = clamped
+        }
+    }
+
+    suspend fun getSessionExpiryDays(): Int {
+        return context.settingsDataStore.data.first()[keySessionExpiryDays]
+            ?: ru.fire_core.xauplayer.core.config.AppConfig.DEFAULT_SESSION_EXPIRY_DAYS
+    }
+
+    suspend fun setSkipRefreshWhenOffline(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[keySkipRefreshWhenOffline] = enabled
+        }
+    }
+
+    suspend fun getSkipRefreshWhenOffline(): Boolean {
+        return context.settingsDataStore.data.first()[keySkipRefreshWhenOffline] ?: true
+    }
+
+    suspend fun setLastSessionRenew(time: Long) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[keyLastSessionRenew] = time
+        }
+    }
+
+    suspend fun getLastSessionRenew(): Long {
+        return context.settingsDataStore.data.first()[keyLastSessionRenew] ?: 0L
     }
 }
 

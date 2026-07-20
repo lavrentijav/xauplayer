@@ -32,8 +32,10 @@ fun AccountTab(
     val activity by vm.activity.collectAsState()
     val account by vm.account.collectAsState()
     val accentColorHex by settingsVm.accentColor.collectAsState()
-    
-    LaunchedEffect(Unit) { 
+    val offlineMode by settingsVm.offlineMode.collectAsState()
+    val sessionRefreshResult by settingsVm.sessionRefreshResult.collectAsState()
+
+    LaunchedEffect(Unit) {
         vm.load()
     }
     
@@ -74,8 +76,41 @@ fun AccountTab(
             }
         }
         
+        // Оффлайн-режим и обновление сессии
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = { settingsVm.refreshSession() },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Обновить сессию")
+            }
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Оффлайн", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = offlineMode,
+                    onCheckedChange = { settingsVm.setOfflineMode(it) }
+                )
+            }
+        }
+        sessionRefreshResult?.let { ok ->
+            Text(
+                if (ok) "Сессия обновлена" else "Не удалось обновить сессию",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+        }
+
         HorizontalDivider()
-        
+
         // Сетка активности
         Text(
             "Активность прослушивания",

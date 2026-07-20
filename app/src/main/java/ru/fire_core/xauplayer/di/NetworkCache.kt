@@ -32,12 +32,26 @@ class NetworkCache @Inject constructor(
     private val _accessToken = AtomicReference<String?>(null)
     private val _refreshToken = AtomicReference<String?>(null)
     private val _currentEmail = AtomicReference<String?>(null)
-    
+    private val _offlineMode = AtomicReference<Boolean>(false)
+    private val _skipRefreshWhenOffline = AtomicReference<Boolean>(true)
+
     // Публичные методы для получения кэшированных значений (не блокирующие)
     fun getBaseUrl(): String = _baseUrl.get()
     fun getAccessToken(): String? = _accessToken.get()
     fun getRefreshToken(): String? = _refreshToken.get()
     fun getCurrentEmail(): String? = _currentEmail.get()
+    fun getOfflineMode(): Boolean = _offlineMode.get()
+    fun getSkipRefreshWhenOffline(): Boolean = _skipRefreshWhenOffline.get()
+
+    /**
+     * Активен ли служебный (сервисный) аккаунт или включён оффлайн-режим.
+     * В этом состоянии сетевой слой эмулирует ответы сервера.
+     */
+    fun isServiceMode(): Boolean {
+        return _offlineMode.get() ||
+            _accessToken.get() == AppConfig.SERVICE_ACCESS_TOKEN ||
+            _currentEmail.get() == AppConfig.SERVICE_ACCOUNT_EMAIL
+    }
     
     init {
         Log.d("NetworkCache", "init START")
@@ -94,6 +108,14 @@ class NetworkCache @Inject constructor(
         
         tokenStore.currentEmail
             .onEach { _currentEmail.set(it) }
+            .launchIn(scope)
+
+        settingsStore.offlineMode
+            .onEach { _offlineMode.set(it) }
+            .launchIn(scope)
+
+        settingsStore.skipRefreshWhenOffline
+            .onEach { _skipRefreshWhenOffline.set(it) }
             .launchIn(scope)
         Log.d("NetworkCache", "init END")
     }

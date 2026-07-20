@@ -6,7 +6,11 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -86,6 +90,95 @@ object NetworkInterceptors {
         }
     }
     
+    /**
+     * Оффлайн-интерцептор: когда активен служебный аккаунт или включён оффлайн-режим,
+     * перехватывает запросы к серверу и эмулирует положительные ответы.
+     * Это позволяет слушать скачанный контент без доступа к серверу и с истёкшими сессиями.
+     *
+     * Перехватываются только сессионные и записывающие эндпоинты (auth, progress, status,
+     * account, health). Читающие эндпоинты (books, chapters, series) пропускаются, чтобы
+     * приложение могло использовать локальный кэш и базу данных.
+     */
+    fun createOfflineInterceptor(networkCache: NetworkCache): Interceptor {
+        return Interceptor { chain ->
+            val request = chain.request()
+
+            if (!networkCache.isServiceMode()) {
+                return@Interceptor chain.proceed(request)
+            }
+
+            val path = request.url.encodedPath
+            val method = request.method
+
+            val body: String? = when {
+                // auth/login и auth/register НЕ эмулируем — это осознанная попытка
+                // достучаться до сервера для входа в реальный аккаунт.
+                path.endsWith("/auth/refresh") -> tokenJson()
+                path.endsWith("/auth/logout") -> statusOkJson()
+                path.contains("/progress/update") -> statusOkJson()
+                path.contains("/progress/sync") -> """{"progress":[],"activity":{}}"""
+                method == "PUT" && path.contains("/status/books/") -> bookStatusJson(path, request)
+                method == "PUT" && path.contains("/status/series/") -> seriesStatusJson(path, request)
+                method == "DELETE" && path.contains("/status/") -> statusOkJson()
+                method == "DELETE" && path.contains("/account/device/") -> statusOkJson()
+                path.endsWith("/account/activity") -> "{}"
+                path.endsWith("/account/devices") -> "[]"
+                path.endsWith("/account") -> accountJson()
+                path.endsWith("/health") -> """{"status":"ok","message":"offline"}"""
+                else -> null
+            }
+
+            if (body == null) {
+                // Неизвестный эндпоинт — пропускаем, приложение использует кэш/БД
+                return@Interceptor chain.proceed(request)
+            }
+
+            Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK (offline emulated)")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("X-Offline-Emulated", "true")
+                .body(body.toResponseBody("application/json".toMediaType()))
+                .build()
+        }
+    }
+
+    private fun tokenJson(): String =
+        """{"access_token":"${ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCESS_TOKEN}","refresh_token":"${ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_REFRESH_TOKEN}","token_type":"bearer","device_id":0}"""
+
+    private fun statusOkJson(): String = """{"status":"ok"}"""
+
+    private fun accountJson(): String =
+        """{"name":"${ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_NAME}","email":"${ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL}","total_time_minutes":0,"is_admin":false}"""
+
+    private fun lastIdFromPath(path: String): Long =
+        path.trimEnd('/').substringAfterLast('/').toLongOrNull() ?: 0L
+
+    private fun statusFromRequestBody(request: okhttp3.Request): String {
+        return try {
+            val buffer = okio.Buffer()
+            request.body?.writeTo(buffer)
+            val raw = buffer.readUtf8()
+            Regex("\"status\"\\s*:\\s*\"([^\"]*)\"").find(raw)?.groupValues?.get(1) ?: "listening"
+        } catch (e: Exception) {
+            "listening"
+        }
+    }
+
+    private fun bookStatusJson(path: String, request: okhttp3.Request): String {
+        val id = lastIdFromPath(path)
+        val status = statusFromRequestBody(request)
+        return """{"book_id":$id,"status":"$status"}"""
+    }
+
+    private fun seriesStatusJson(path: String, request: okhttp3.Request): String {
+        val id = lastIdFromPath(path)
+        val status = statusFromRequestBody(request)
+        return """{"series_id":$id,"status":"$status"}"""
+    }
+
     fun createAuthInterceptor(networkCache: NetworkCache): Interceptor {
         return Interceptor { chain ->
             val original = chain.request()
@@ -232,6 +325,22 @@ object NetworkInterceptors {
         settingsStore: SettingsStore,
         logger: AppLogger
     ): Boolean {
+        // Req 2: не пытаемся обновлять сессию без доступа к серверу.
+        // В служебном/оффлайн-режиме просто продлеваем сессию локально.
+        if (networkCache.isServiceMode()) {
+            logger.info("NetworkInterceptors", "Service/offline mode: extending session locally without server refresh")
+            try {
+                runBlocking {
+                    withTimeout(2000) {
+                        settingsStore.setLastSessionRenew(System.currentTimeMillis())
+                    }
+                }
+            } catch (e: Exception) {
+                // Игнорируем — продление локальное, не критично
+            }
+            return true
+        }
+
         val refreshClient = OkHttpClient.Builder()
             .connectTimeout(ru.fire_core.xauplayer.core.config.AppConfig.NETWORK_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(ru.fire_core.xauplayer.core.config.AppConfig.NETWORK_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -328,8 +437,29 @@ object NetworkInterceptors {
                             }
                         }
                         // Берем последний использованный аккаунт (с самым большим lastLogin)
-                        val lastAccount = savedAccounts.maxByOrNull { it.lastLogin }
-                        if (lastAccount != null && !lastAccount.accessToken.isNullOrBlank() && !lastAccount.refreshToken.isNullOrBlank()) {
+                        val lastAccount = savedAccounts
+                            .filter { it.email != ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL }
+                            .maxByOrNull { it.lastLogin }
+                        val hasValidTokens = lastAccount != null &&
+                            !lastAccount.accessToken.isNullOrBlank() &&
+                            !lastAccount.refreshToken.isNullOrBlank()
+
+                        if (!hasValidTokens && tokenStore != null) {
+                            // Req 4: нет доступа к серверу и нет валидной сессии —
+                            // автоматически входим в служебный аккаунт для прослушивания скачанного
+                            logger.info("NetworkInterceptors", "No valid session and no network, entering service (offline) account")
+                            runBlocking {
+                                withTimeout(5000) {
+                                    tokenStore.setCurrentEmail(ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL)
+                                    tokenStore.save(
+                                        ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCESS_TOKEN,
+                                        ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_REFRESH_TOKEN,
+                                        0,
+                                        ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL
+                                    )
+                                }
+                            }
+                        } else if (hasValidTokens && lastAccount != null && !lastAccount.accessToken.isNullOrBlank() && !lastAccount.refreshToken.isNullOrBlank()) {
                             logger.info("NetworkInterceptors", "Network error detected, attempting auto-login to offline account: ${lastAccount.email}")
                             // Пытаемся выбрать аккаунт (это установит токены если они есть)
                             // Не пытаемся refresh токен, так как сети нет - просто восстанавливаем токены из сохраненного аккаунта
