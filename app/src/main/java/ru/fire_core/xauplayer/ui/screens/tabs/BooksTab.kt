@@ -51,11 +51,40 @@ fun BooksTab(
     var showTagDialog by remember { mutableStateOf(false) }
     var selectedBookForTags by remember { mutableStateOf<Book?>(null) }
     var selectedSeriesForTags by remember { mutableStateOf<Series?>(null) }
-    
+
+    // Поиск и страницы просмотра книги/серии
+    var searchQuery by remember { mutableStateOf("") }
+    var bookForDetail by remember { mutableStateOf<Book?>(null) }
+    var seriesForDetail by remember { mutableStateOf<ru.fire_core.xauplayer.ui.viewmodel.SeriesWithBooks?>(null) }
+
     // Получаем список ID книг с прогрессом
     val booksWithProgress = playerState.books.map { it.id }.toSet()
-    
+
+    // Фильтрация по поисковому запросу
+    val q = searchQuery.trim().lowercase()
+    val mySeriesFiltered = state.mySeries.filter { seriesMatches(it, q) }
+    val librarySeriesFiltered = state.librarySeries.filter { seriesMatches(it, q) }
+    val booksWithoutSeriesFiltered = state.booksWithoutSeries.filter { bookMatches(it, q) }
+    val nothingFound = mySeriesFiltered.isEmpty() && librarySeriesFiltered.isEmpty() && booksWithoutSeriesFiltered.isEmpty()
+
     Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+        // Поиск по книгам и сериям
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            label = { Text("Поиск книг и серий") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Очистить")
+                    }
+                }
+            }
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
         // Показываем ошибку если есть
         if (state.hasNetworkError && !state.loading) {
             Card(
@@ -88,9 +117,9 @@ fun BooksTab(
         Box(modifier = Modifier.weight(1f)) {
             if (state.loading) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-            } else if (state.books.isEmpty() && !state.hasNetworkError) {
+            } else if (nothingFound && !state.hasNetworkError) {
                 Text(
-                    text = "Нет книг",
+                    text = if (q.isNotEmpty()) "Ничего не найдено" else "Нет книг",
                     modifier = Modifier.align(Alignment.Center),
                     style = MaterialTheme.typography.bodyLarge
                 )
@@ -99,7 +128,7 @@ fun BooksTab(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     // Секция "Мои серии"
-                    if (state.mySeries.isNotEmpty()) {
+                    if (mySeriesFiltered.isNotEmpty()) {
                         item {
                             Text(
                                 text = "Мои серии",
@@ -111,7 +140,7 @@ fun BooksTab(
                                 )
                             )
                         }
-                        items(state.mySeries) { seriesWithBooks ->
+                        items(mySeriesFiltered) { seriesWithBooks ->
                             SeriesItem(
                                 seriesWithBooks = seriesWithBooks,
                                 selectedBookId = state.selectedBook?.id,
@@ -120,9 +149,9 @@ fun BooksTab(
                                 seriesTags = state.seriesTags[seriesWithBooks.series.id] ?: emptyList(),
                                 bookTags = state.bookTags,
                                 vm = vm,
+                                onOpenSeries = { seriesForDetail = it },
                                 onBookSelected = { book ->
-                                    vm.selectBook(book)
-                                    onBookSelected(book)
+                                    bookForDetail = book
                                 },
                                 onAddBook = { book ->
                                     playerVm.addBook(book)
@@ -139,9 +168,9 @@ fun BooksTab(
                             )
                         }
                     }
-                    
+
                     // Секция "Библиотека"
-                    if (state.librarySeries.isNotEmpty()) {
+                    if (librarySeriesFiltered.isNotEmpty()) {
                         item {
                             Text(
                                 text = "Библиотека",
@@ -153,7 +182,7 @@ fun BooksTab(
                                 )
                             )
                         }
-                        items(state.librarySeries) { seriesWithBooks ->
+                        items(librarySeriesFiltered) { seriesWithBooks ->
                             SeriesItem(
                                 seriesWithBooks = seriesWithBooks,
                                 selectedBookId = state.selectedBook?.id,
@@ -162,9 +191,9 @@ fun BooksTab(
                                 seriesTags = state.seriesTags[seriesWithBooks.series.id] ?: emptyList(),
                                 bookTags = state.bookTags,
                                 vm = vm,
+                                onOpenSeries = { seriesForDetail = it },
                                 onBookSelected = { book ->
-                                    vm.selectBook(book)
-                                    onBookSelected(book)
+                                    bookForDetail = book
                                 },
                                 onAddBook = { book ->
                                     playerVm.addBook(book)
@@ -181,9 +210,9 @@ fun BooksTab(
                             )
                         }
                     }
-                    
+
                     // Секция "Книги вне серий"
-                    if (state.booksWithoutSeries.isNotEmpty()) {
+                    if (booksWithoutSeriesFiltered.isNotEmpty()) {
                         item {
                             Text(
                                 text = "Книги вне серий",
@@ -192,16 +221,15 @@ fun BooksTab(
                                 modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
                             )
                         }
-                        items(state.booksWithoutSeries) { book -> 
+                        items(booksWithoutSeriesFiltered) { book ->
                             BookRowWithStatus(
                                 book = book,
                                 isSelected = state.selectedBook?.id == book.id,
                                 hasProgress = booksWithProgress.contains(book.id),
                                 tags = state.bookTags[book.id] ?: emptyList(),
                                 vm = vm,
-                                onClick = { 
-                                    vm.selectBook(book)
-                                    onBookSelected(book)
+                                onClick = {
+                                    bookForDetail = book
                                 },
                                 onAddBook = {
                                     playerVm.addBook(book)
@@ -239,6 +267,45 @@ fun BooksTab(
             }
         )
     }
+
+    // Страница просмотра книги
+    bookForDetail?.let { b ->
+        BookDetailDialog(
+            book = b,
+            vm = vm,
+            bookStatus = state.bookStatuses[b.id],
+            onPlay = {
+                playerVm.addBook(b)
+                vm.selectBook(b)
+                onBookSelected(b)
+            },
+            onDismiss = { bookForDetail = null }
+        )
+    }
+
+    // Страница серии
+    seriesForDetail?.let { s ->
+        SeriesDetailDialog(
+            seriesWithBooks = s,
+            vm = vm,
+            onOpenBook = { bookForDetail = it },
+            onDismiss = { seriesForDetail = null }
+        )
+    }
+}
+
+/** Совпадает ли серия (или её книги) с поисковым запросом. */
+private fun seriesMatches(s: ru.fire_core.xauplayer.ui.viewmodel.SeriesWithBooks, q: String): Boolean {
+    if (q.isEmpty()) return true
+    if (s.series.name.lowercase().contains(q)) return true
+    if (s.series.description?.lowercase()?.contains(q) == true) return true
+    return s.books.any { bookMatches(it, q) }
+}
+
+/** Совпадает ли книга с поисковым запросом. */
+private fun bookMatches(b: Book, q: String): Boolean {
+    if (q.isEmpty()) return true
+    return b.title.lowercase().contains(q) || b.author.lowercase().contains(q)
 }
 
 /**
@@ -264,6 +331,7 @@ private fun SeriesItem(
     seriesTags: List<Tag>,
     bookTags: Map<Long, List<Tag>>,
     vm: BooksViewModel,
+    onOpenSeries: (ru.fire_core.xauplayer.ui.viewmodel.SeriesWithBooks) -> Unit = {},
     onBookSelected: (Book) -> Unit,
     onAddBook: (Book) -> Unit,
     onLongPress: (Series) -> Unit = {},
@@ -285,7 +353,7 @@ private fun SeriesItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .combinedClickable(
-                        onClick = { isExpanded = !isExpanded },
+                        onClick = { onOpenSeries(seriesWithBooks) },
                         onLongClick = { onLongPress(seriesWithBooks.series) }
                     )
                     .padding(12.dp),
@@ -343,10 +411,12 @@ private fun SeriesItem(
                         }
                     }
                 }
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (isExpanded) "Свернуть" else "Развернуть"
-                )
+                IconButton(onClick = { isExpanded = !isExpanded }) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Свернуть" else "Развернуть"
+                    )
+                }
             }
             
             // Книги серии

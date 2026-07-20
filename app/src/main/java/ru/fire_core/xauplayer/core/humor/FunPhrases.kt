@@ -173,22 +173,26 @@ object FunPhrases {
      * @param emoji значок в углу обложки
      * @param colorHex цвет свечения/рамки (#RRGGBB)
      */
-    data class BookEffect(val emoji: String, val colorHex: String)
+    /**
+     * @param kind тип полноэкранного эффекта: "matrix" (цифровой дождь),
+     *   "rising" (искры/частицы взмывают вверх), "stars" (звёзды/космос).
+     */
+    data class BookEffect(val emoji: String, val colorHex: String, val kind: String)
 
     // Ключевое слово (в нижнем регистре) -> эффект. Проверяется вхождением в название.
     private val bookEffects: List<Pair<List<String>, BookEffect>> = listOf(
-        listOf("гарри поттер", "harry potter", "хогвартс", "поттер") to BookEffect("⚡", "#9C27B0"),
-        listOf("властелин колец", "хоббит", "lord of the rings", "кольц", "толкин", "средиземь") to BookEffect("💍", "#FFD700"),
-        listOf("ведьмак", "witcher", "геральт") to BookEffect("🐺", "#B0BEC5"),
-        listOf("дюна", "dune", "арракис") to BookEffect("🏜️", "#E8A33D"),
-        listOf("метро 2033", "метро 2034", "метро 2035", "метро") to BookEffect("☢️", "#7CB342"),
-        listOf("дракон", "dragon", "драконь") to BookEffect("🐉", "#E53935"),
-        listOf("звёзд", "звезд", "star wars", "звёздные войны", "космос", "галактик") to BookEffect("🚀", "#42A5F5"),
-        listOf("1984", "оруэлл", "orwell", "большой брат") to BookEffect("👁️", "#EF5350"),
-        listOf("матриц", "matrix") to BookEffect("🟩", "#00E676"),
-        listOf("шерлок", "sherlock", "холмс", "holmes") to BookEffect("🔎", "#8D6E63"),
-        listOf("зомби", "zombie", "мертвец", "апокалипс") to BookEffect("🧟", "#66BB6A"),
-        listOf("вампир", "vampire", "дракула") to BookEffect("🦇", "#7E57C2")
+        listOf("гарри поттер", "harry potter", "хогвартс", "поттер") to BookEffect("⚡", "#B388FF", "rising"),
+        listOf("властелин колец", "хоббит", "lord of the rings", "кольц", "толкин", "средиземь") to BookEffect("💍", "#FFD700", "rising"),
+        listOf("ведьмак", "witcher", "геральт") to BookEffect("🐺", "#B0BEC5", "rising"),
+        listOf("дюна", "dune", "арракис") to BookEffect("🏜️", "#E8A33D", "rising"),
+        listOf("метро 2033", "метро 2034", "метро 2035", "метро") to BookEffect("☢️", "#7CB342", "rising"),
+        listOf("дракон", "dragon", "драконь") to BookEffect("🐉", "#FF7043", "rising"),
+        listOf("звёзд", "звезд", "star wars", "звёздные войны", "космос", "галактик") to BookEffect("🚀", "#42A5F5", "stars"),
+        listOf("1984", "оруэлл", "orwell", "большой брат") to BookEffect("👁️", "#EF5350", "matrix"),
+        listOf("матриц", "matrix") to BookEffect("🟩", "#00E676", "matrix"),
+        listOf("шерлок", "sherlock", "холмс", "holmes") to BookEffect("🔎", "#B0A18F", "rising"),
+        listOf("зомби", "zombie", "мертвец", "апокалипс") to BookEffect("🧟", "#66BB6A", "rising"),
+        listOf("вампир", "vampire", "дракула") to BookEffect("🦇", "#B388FF", "rising")
     )
 
     fun bookEffect(title: String?): BookEffect? {
