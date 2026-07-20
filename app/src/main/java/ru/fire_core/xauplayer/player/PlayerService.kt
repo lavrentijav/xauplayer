@@ -142,34 +142,39 @@ class PlayerService : MediaSessionService() {
             // MediaSession активируется автоматически при создании через Builder
             mediaSession = MediaSession.Builder(this, player).build()
 
-            // Уведомление плеера через PlayerNotificationManager (проверенный, рабочий путь).
-            // Он слушает плеер и вызывает startForeground с настоящим MediaStyle-уведомлением,
-            // заменяя стартовую заглушку «Инициализация плеера…».
-            //
-            // Примечание про «системный режим»: встроенное уведомление MediaSessionService
-            // (DefaultMediaNotificationProvider) в этой архитектуре не появляется, т.к. приложение
-            // управляет ExoPlayer напрямую и к сессии не подключается MediaController — поэтому
-            // сервис не постит своё уведомление. Интеграцию с системными медиа-контролами
-            // («сейчас играет» / экран блокировки) обеспечивает сам MediaSession, который создаётся
-            // всегда. Поэтому используем PlayerNotificationManager независимо от переключателя.
-            notificationManager = PlayerNotificationManager.Builder(
-                this,
-                NOTIFICATION_ID,
-                channelId
-            ).apply {
-                setMediaDescriptionAdapter(MediaDescriptionAdapter())
-                setNotificationListener(NotificationListener())
-            }.build().apply {
-                setUsePlayPauseActions(true)
-                setUseStopAction(false)
-                setUseFastForwardAction(true)
-                setUseRewindAction(true)
-                setUseNextAction(true)
-                setUsePreviousAction(true)
-                setPlayer(player)
+            if (useSystemMediaPlayer) {
+                // СИСТЕМНЫЙ режим: встроенное уведомление MediaSessionService, связанное с
+                // сессией — появляется в системных медиа-контролах («сейчас играет» /
+                // экран блокировки). Работает благодаря корректной регистрации сервиса в
+                // манифесте (intent-filter androidx.media3.session.MediaSessionService).
+                // Задаём тот же id/канал, что и у стартовой заглушки, чтобы заменить её.
+                setMediaNotificationProvider(
+                    androidx.media3.session.DefaultMediaNotificationProvider.Builder(this)
+                        .setNotificationId(NOTIFICATION_ID)
+                        .setChannelId(channelId)
+                        .build()
+                )
+                logger.info("PlayerService", "MediaSession: системное уведомление (DefaultMediaNotificationProvider)")
+            } else {
+                // Кастомный режим: собственное уведомление через PlayerNotificationManager.
+                notificationManager = PlayerNotificationManager.Builder(
+                    this,
+                    NOTIFICATION_ID,
+                    channelId
+                ).apply {
+                    setMediaDescriptionAdapter(MediaDescriptionAdapter())
+                    setNotificationListener(NotificationListener())
+                }.build().apply {
+                    setUsePlayPauseActions(true)
+                    setUseStopAction(false)
+                    setUseFastForwardAction(true)
+                    setUseRewindAction(true)
+                    setUseNextAction(true)
+                    setUsePreviousAction(true)
+                    setPlayer(player)
+                }
+                logger.info("PlayerService", "MediaSession: кастомное уведомление (PlayerNotificationManager)")
             }
-
-            logger.info("PlayerService", "MediaSession настроен, уведомление через PlayerNotificationManager (useSystemMediaPlayer=$useSystemMediaPlayer)")
             
         } catch (e: Exception) {
             logger.error("PlayerService", "Error setting up media session: ${e.message}", e)
