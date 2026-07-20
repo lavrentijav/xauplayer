@@ -89,6 +89,24 @@ fun UpdateDialog(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
+                // Прикольная фраза (актуально / вы в прошлом / вы из будущего)
+                updateState.funMessage?.let { fun2 ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Text(
+                            text = fun2,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
                 when (updateState.state) {
                     ru.fire_core.xauplayer.update.UpdateState.CHECKING -> {
                         CircularProgressIndicator()

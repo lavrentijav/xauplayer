@@ -126,6 +126,11 @@ fun SecuritySettingsDialog(
                         )
                     }
                 )
+                editedExpiryDays.toIntOrNull()?.let { n ->
+                    ru.fire_core.xauplayer.core.humor.FunPhrases.numberEgg(n)?.let { egg ->
+                        Text(egg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 if (editedExpiryDays.toIntOrNull() != sessionExpiryDays) {
                     Button(
                         onClick = {

@@ -72,6 +72,11 @@ fun SpeedSettingsDialog(
                     placeholder = { Text("1.0") },
                     supportingText = { Text("Текущее значение: ${"%.2f".format(defaultSpeed)}x") }
                 )
+                editedDefaultSpeed.toFloatOrNull()?.let { s ->
+                    ru.fire_core.xauplayer.core.humor.FunPhrases.speedEgg(s)?.let { egg ->
+                        Text(egg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 if (editedDefaultSpeed != defaultSpeed.toString()) {
                     Button(
                         onClick = {
@@ -103,6 +108,11 @@ fun SpeedSettingsDialog(
                     placeholder = { Text("30") },
                     supportingText = { Text("Текущее значение: ${rewindSeconds} сек") }
                 )
+                editedRewindSeconds.toIntOrNull()?.let { n ->
+                    ru.fire_core.xauplayer.core.humor.FunPhrases.numberEgg(n)?.let { egg ->
+                        Text(egg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 if (editedRewindSeconds != rewindSeconds.toString()) {
                     Button(
                         onClick = {
@@ -134,6 +144,11 @@ fun SpeedSettingsDialog(
                     placeholder = { Text("15") },
                     supportingText = { Text("Текущее значение: ${forwardSeconds} сек") }
                 )
+                editedForwardSeconds.toIntOrNull()?.let { n ->
+                    ru.fire_core.xauplayer.core.humor.FunPhrases.numberEgg(n)?.let { egg ->
+                        Text(egg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 if (editedForwardSeconds != forwardSeconds.toString()) {
                     Button(
                         onClick = {

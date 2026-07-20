@@ -43,7 +43,8 @@ data class UpdateProgress(
     val totalBytes: Long = 0,
     val error: String? = null,
     val updateInfo: UpdateInfo? = null,
-    val statusMessage: String? = null // Текстовое описание текущего статуса
+    val statusMessage: String? = null, // Текстовое описание текущего статуса
+    val funMessage: String? = null // Прикольная фраза (актуальная версия / вы в прошлом / вы из будущего)
 )
 
 @Singleton
@@ -224,10 +225,22 @@ class UpdateManager @Inject constructor(
             // Сравниваем версии по компонентам (major.stage.build)
             // buildversion может доходить до тысяч - это просто номер билда с новой эры
             if (!isVersionNewer(serverVersion, currentVersion)) {
-                logger.info("UpdateManager", "No updates available. Current: $currentVersion, Server: $serverVersion")
+                // Различаем два случая: версии равны (актуально) и локальная новее серверной (из будущего)
+                val localIsAhead = isVersionNewer(currentVersion, serverVersion)
+                val funMessage = if (localIsAhead) {
+                    ru.fire_core.xauplayer.core.humor.FunPhrases.updateAhead()
+                } else {
+                    ru.fire_core.xauplayer.core.humor.FunPhrases.updateUpToDate()
+                }
+                logger.info("UpdateManager", "No updates available. Current: $currentVersion, Server: $serverVersion, ahead=$localIsAhead")
                 _updateProgress.value = _updateProgress.value.copy(
                     state = UpdateState.IDLE,
-                    statusMessage = "Обновления не найдены. У вас установлена актуальная версия."
+                    statusMessage = if (localIsAhead) {
+                        "Ваша версия ($currentVersion) новее серверной ($serverVersion)."
+                    } else {
+                        "Обновления не найдены. У вас установлена актуальная версия."
+                    },
+                    funMessage = funMessage
                 )
                 return@withContext null
             }
@@ -251,7 +264,8 @@ class UpdateManager @Inject constructor(
             _updateProgress.value = _updateProgress.value.copy(
                 state = UpdateState.UPDATE_AVAILABLE,
                 updateInfo = updateInfo,
-                statusMessage = "Доступна новая версия: $serverVersion"
+                statusMessage = "Доступна новая версия: $serverVersion",
+                funMessage = ru.fire_core.xauplayer.core.humor.FunPhrases.updateBehind()
             )
 
             return@withContext updateInfo
