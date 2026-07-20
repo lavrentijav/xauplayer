@@ -35,6 +35,11 @@ fun AccountTab(
     val offlineMode by settingsVm.offlineMode.collectAsState()
     val sessionRefreshResult by settingsVm.sessionRefreshResult.collectAsState()
 
+    // Определяем оффлайн/служебный аккаунт для прикольной подписи
+    val isOfflineAccount = offlineMode ||
+        account?.email == ru.fire_core.xauplayer.core.config.AppConfig.SERVICE_ACCOUNT_EMAIL
+    val offlineCaption = remember { ru.fire_core.xauplayer.core.humor.FunPhrases.offlineCaption() }
+
     LaunchedEffect(Unit) {
         vm.load()
     }
@@ -76,6 +81,23 @@ fun AccountTab(
             }
         }
         
+        // Прикольная подпись для оффлайн/служебного аккаунта
+        if (isOfflineAccount) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                )
+            ) {
+                Text(
+                    offlineCaption,
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+
         // Оффлайн-режим и обновление сессии
         Row(
             modifier = Modifier.fillMaxWidth(),

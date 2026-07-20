@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.*
 import android.graphics.Color as AndroidColor
@@ -37,7 +38,12 @@ fun ColorPicker(
     var hue by remember { mutableStateOf(colorToHsv(color).h) }
     var saturation by remember { mutableStateOf(colorToHsv(color).s) }
     var brightness by remember { mutableStateOf(colorToHsv(color).v) }
-    
+
+    // Локальный текст HEX-поля, чтобы можно было свободно вводить код цвета вручную.
+    // Раньше поле было привязано к вычисляемому значению и «сбрасывало» ввод на каждом
+    // символе — код цвета невозможно было ввести. Теперь держим отдельное состояние.
+    var hexText by remember { mutableStateOf(colorToHex(color)) }
+
     // Обновляем значения при изменении цвета извне
     LaunchedEffect(currentColor) {
         val newColor = try {
@@ -49,17 +55,48 @@ fun ColorPicker(
         hue = hsv.h
         saturation = hsv.s
         brightness = hsv.v
+        hexText = colorToHex(newColor)
     }
-    
+
     val selectedColor = remember(hue, saturation, brightness) {
         hsvToColor(hue, saturation, brightness)
     }
-    
+
+    // Когда цвет меняется ползунками/пресетами/извне — синхронизируем текст поля.
+    LaunchedEffect(selectedColor) {
+        val normalized = colorToHex(selectedColor)
+        if (!hexText.equals(normalized, ignoreCase = true)) {
+            hexText = normalized
+        }
+    }
+
+    // Пасхалка: для некоторых цветов показываем фразу сверху.
+    val colorEgg = ru.fire_core.xauplayer.core.humor.FunPhrases.colorEasterEgg(colorToHex(selectedColor))
+
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Пасхалка на цвет (появляется только для особых цветов)
+        colorEgg?.let { egg ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = selectedColor.copy(alpha = 0.18f)
+                )
+            ) {
+                Text(
+                    egg,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+
         // Предпросмотр выбранного цвета
         Card(
             modifier = Modifier.size(100.dp),
@@ -72,24 +109,41 @@ fun ColorPicker(
             Box(modifier = Modifier.fillMaxSize())
         }
         
-        // Hex значение
+        // Hex значение — можно вводить код цвета вручную
+        val hexValid = hexText.matches(Regex("^#[0-9A-Fa-f]{6}$"))
         OutlinedTextField(
-            value = colorToHex(selectedColor),
-            onValueChange = { hex ->
-                try {
-                    if (hex.matches(Regex("^#[0-9A-Fa-f]{6}$"))) {
-                        val newColor = Color(AndroidColor.parseColor(hex))
+            value = hexText,
+            onValueChange = { raw ->
+                // Нормализуем ввод: гарантируем ведущий '#', оставляем только hex-символы,
+                // приводим к верхнему регистру, ограничиваем длину 7 (#RRGGBB).
+                var t = raw.uppercase()
+                if (!t.startsWith("#")) t = "#$t"
+                t = "#" + t.drop(1).filter { it in '0'..'9' || it in 'A'..'F' }
+                if (t.length > 7) t = t.substring(0, 7)
+                hexText = t
+
+                // Применяем только когда код полный и корректный.
+                if (t.matches(Regex("^#[0-9A-Fa-f]{6}$"))) {
+                    try {
+                        val newColor = Color(AndroidColor.parseColor(t))
                         val hsv = colorToHsv(newColor)
                         hue = hsv.h
                         saturation = hsv.s
                         brightness = hsv.v
-                        onColorChanged(hex)
+                        onColorChanged(t)
+                    } catch (e: Exception) {
+                        // Игнорируем неверный формат
                     }
-                } catch (e: Exception) {
-                    // Игнорируем неверный формат
                 }
             },
             label = { Text("Цвет (HEX)") },
+            placeholder = { Text("#1DB954") },
+            isError = hexText.isNotEmpty() && !hexValid,
+            supportingText = {
+                if (hexText.isNotEmpty() && !hexValid) {
+                    Text("Введите код в формате #RRGGBB")
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )

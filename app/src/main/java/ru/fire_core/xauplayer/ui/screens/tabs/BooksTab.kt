@@ -448,10 +448,10 @@ private fun BookRow(
     }
     
     val statusLabel = when (bookStatus) {
-        "listening" -> "Слушаю"
-        "wanted" -> "В планах"
-        "completed" -> "Прослушано"
-        "dropped" -> "Брошено"
+        "listening" -> "Слушаю 🎧"
+        "wanted" -> "В планах 📚"
+        "completed" -> "Прослушано ✅"
+        "dropped" -> "Брошено 🥀"
         else -> null
     }
     

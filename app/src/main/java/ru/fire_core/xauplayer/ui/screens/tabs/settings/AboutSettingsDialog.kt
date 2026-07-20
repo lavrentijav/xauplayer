@@ -1,5 +1,6 @@
 package ru.fire_core.xauplayer.ui.screens.tabs.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +22,11 @@ fun AboutSettingsDialog(
     onDismiss: () -> Unit
 ) {
     var showUpdateDialog by remember { mutableStateOf(false) }
+    // Пасхалка: считаем нажатия на версию
+    var versionTaps by remember { mutableStateOf(0) }
+    val tapMessage = ru.fire_core.xauplayer.core.humor.FunPhrases.versionTap(versionTaps)
+    // Случайная отсылка на фильмы/сериалы/аниме (выбирается один раз при открытии)
+    val reference = remember { ru.fire_core.xauplayer.core.humor.FunPhrases.aboutReference() }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -54,7 +60,8 @@ fun AboutSettingsDialog(
 
                 Text(
                     "XAuPlayer v${ru.fire_core.xauplayer.BuildConfig.VERSION_NAME}",
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.clickable { versionTaps++ }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -64,6 +71,32 @@ fun AboutSettingsDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                // Прикольная отсылка
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    reference,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Пасхалка с нажатиями на версию
+                tapMessage?.let { msg ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Text(
+                            msg,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
