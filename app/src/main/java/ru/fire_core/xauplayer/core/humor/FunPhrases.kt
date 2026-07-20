@@ -146,6 +146,60 @@ object FunPhrases {
         else -> null
     }
 
+    // ===== Пасхалки на «магические» числа (в полях настроек) =====
+    fun numberEgg(n: Int): String? = when (n) {
+        0 -> "Ноль. Абсолютный дзен."
+        42 -> "Ответ на главный вопрос жизни, вселенной и всего такого. (Автостопом по галактике)"
+        69 -> "Nice."
+        404 -> "Не найдено... но всё же найдено."
+        420 -> "Расслабься."
+        777 -> "Джекпот!"
+        1337 -> "Ты — элита (l33t)."
+        9000 -> "IT'S OVER 9000!!! (Dragon Ball Z)"
+        else -> null
+    }
+
+    /** Пасхалка на скорость воспроизведения. */
+    fun speedEgg(speed: Float): String? = when {
+        speed >= 2.99f -> "Тройная скорость! Ты слушаешь быстрее, чем читает рэп Эминем."
+        speed <= 0.51f -> "Медленно... наслаждаешься каждым словом. Дзен."
+        kotlin.math.abs(speed - 1.21f) < 0.005f -> "1.21 гигаватта?! (Назад в будущее)"
+        else -> null
+    }
+
+    // ===== Эффекты для некоторых книг по названию =====
+    /**
+     * Эффект книги: эмодзи-бейдж и цвет свечения/рамки поверх обложки.
+     * @param emoji значок в углу обложки
+     * @param colorHex цвет свечения/рамки (#RRGGBB)
+     */
+    data class BookEffect(val emoji: String, val colorHex: String)
+
+    // Ключевое слово (в нижнем регистре) -> эффект. Проверяется вхождением в название.
+    private val bookEffects: List<Pair<List<String>, BookEffect>> = listOf(
+        listOf("гарри поттер", "harry potter", "хогвартс", "поттер") to BookEffect("⚡", "#9C27B0"),
+        listOf("властелин колец", "хоббит", "lord of the rings", "кольц", "толкин", "средиземь") to BookEffect("💍", "#FFD700"),
+        listOf("ведьмак", "witcher", "геральт") to BookEffect("🐺", "#B0BEC5"),
+        listOf("дюна", "dune", "арракис") to BookEffect("🏜️", "#E8A33D"),
+        listOf("метро 2033", "метро 2034", "метро 2035", "метро") to BookEffect("☢️", "#7CB342"),
+        listOf("дракон", "dragon", "драконь") to BookEffect("🐉", "#E53935"),
+        listOf("звёзд", "звезд", "star wars", "звёздные войны", "космос", "галактик") to BookEffect("🚀", "#42A5F5"),
+        listOf("1984", "оруэлл", "orwell", "большой брат") to BookEffect("👁️", "#EF5350"),
+        listOf("матриц", "matrix") to BookEffect("🟩", "#00E676"),
+        listOf("шерлок", "sherlock", "холмс", "holmes") to BookEffect("🔎", "#8D6E63"),
+        listOf("зомби", "zombie", "мертвец", "апокалипс") to BookEffect("🧟", "#66BB6A"),
+        listOf("вампир", "vampire", "дракула") to BookEffect("🦇", "#7E57C2")
+    )
+
+    fun bookEffect(title: String?): BookEffect? {
+        if (title.isNullOrBlank()) return null
+        val t = title.lowercase()
+        for ((keys, effect) in bookEffects) {
+            if (keys.any { t.contains(it) }) return effect
+        }
+        return null
+    }
+
     // ===== Прикольные подписи к статусам книг/серий =====
     fun statusEmoji(status: String?): String = when (status) {
         "listening" -> "🎧"

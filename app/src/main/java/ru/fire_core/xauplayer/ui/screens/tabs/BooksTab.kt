@@ -2,6 +2,7 @@ package ru.fire_core.xauplayer.ui.screens.tabs
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -454,7 +455,15 @@ private fun BookRow(
         "dropped" -> "Брошено 🥀"
         else -> null
     }
-    
+
+    // Эффект для некоторых книг по названию (эмодзи-бейдж + цветная рамка обложки)
+    val bookEffect = ru.fire_core.xauplayer.core.humor.FunPhrases.bookEffect(b.title)
+    val effectColor = remember(bookEffect) {
+        bookEffect?.let {
+            try { Color(android.graphics.Color.parseColor(it.colorHex)) } catch (e: Exception) { null }
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -475,13 +484,31 @@ private fun BookRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Обложка с полупрозрачной надписью статуса
-            Box(modifier = Modifier.size(if (isInSeries) 48.dp else 64.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(if (isInSeries) 48.dp else 64.dp)
+                    .then(
+                        if (effectColor != null)
+                            Modifier.border(2.dp, effectColor, RoundedCornerShape(4.dp))
+                        else Modifier
+                    )
+            ) {
                 AsyncImage(
-                    model = coverUrl, 
-                    contentDescription = null, 
+                    model = coverUrl,
+                    contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit
                 )
+                // Эмодзи-бейдж эффекта в углу обложки
+                bookEffect?.let { eff ->
+                    Text(
+                        eff.emoji,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(2.dp)
+                    )
+                }
                 // Полупрозрачная надпись статуса поверх обложки снизу
                 if (statusLabel != null && statusColor != null) {
                     Box(
