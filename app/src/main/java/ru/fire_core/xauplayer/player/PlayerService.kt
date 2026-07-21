@@ -72,23 +72,19 @@ class PlayerService : MediaSessionService() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        
+
         val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("XAuPlayer")
             .setContentText("Инициализация плеера...")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            // MediaStyle уведомления автоматически создаются PlayerNotificationManager
-            // LOW приоритет для медиа - не издает звуки, но видно в шторке
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            // Отключаем звук уведомления
             .setSound(null)
             .setOnlyAlertOnce(true)
             .build()
-        
-        // Для Android 14+ (API 34+) требуется явно указывать тип foreground service
+
         if (Build.VERSION.SDK_INT >= 34) {
             ServiceCompat.startForeground(
                 this,
@@ -233,13 +229,12 @@ class PlayerService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
-        // Настраиваем MediaSession если еще не настроен
-        // НЕ вызываем setupMediaSession синхронно, чтобы не блокировать
+        // ВАЖНО: настраиваем сессию СИНХРОННО. Если вернуть null (сессия ещё не готова),
+        // подключение MediaController будет ОТКЛОНЕНО — а без подключённого контроллера
+        // системное уведомление (DefaultMediaNotificationProvider) не публикуется.
+        // setupMediaSession быстрый (плеер уже создан в PlayerHolder), блокировки нет.
         if (mediaSession == null) {
-            // Настраиваем асинхронно, чтобы не блокировать вызов
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                setupMediaSession()
-            }
+            setupMediaSession()
         }
         return mediaSession
     }
