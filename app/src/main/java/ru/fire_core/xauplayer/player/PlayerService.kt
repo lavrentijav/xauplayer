@@ -37,7 +37,6 @@ class PlayerService : MediaSessionService() {
     @Inject lateinit var logger: AppLogger
     @Inject lateinit var okHttpClient: OkHttpClient
     @Inject lateinit var settingsStore: ru.fire_core.xauplayer.data.datastore.SettingsStore
-    @Inject lateinit var mediaControllerConnection: MediaControllerConnection
     private val channelId = "xauplayer_media"
     private var mediaSession: MediaSession? = null
     private var notificationManager: PlayerNotificationManager? = null
@@ -157,27 +156,45 @@ class PlayerService : MediaSessionService() {
             // MediaSession активируется автоматически при создании через Builder
             mediaSession = MediaSession.Builder(this, player).build()
 
-            if (useSystemMediaPlayer) {
-                // СИСТЕМНЫЙ режим: встроенное уведомление MediaSessionService, связанное с
-                // сессией — появляется в системных медиа-контролах («сейчас играет» /
-                // экран блокировки). Работает благодаря корректной регистрации сервиса в
-                // манифесте (intent-filter androidx.media3.session.MediaSessionService).
-                // Задаём тот же id/канал, что и у стартовой заглушки, чтобы заменить её.
-                setMediaNotificationProvider(
-                    androidx.media3.session.DefaultMediaNotificationProvider.Builder(this)
-                        .setNotificationId(NOTIFICATION_ID)
-                        .setChannelId(channelId)
-                        .build()
-                )
-                // Системное уведомление публикуется сервисом только при подключённом
-                // MediaController — подключаем его.
-                mediaControllerConnection.connect()
-                logger.info("PlayerService", "MediaSession: системное уведомление (DefaultMediaNotificationProvider)")
-            } else {
-                // Кастомный режим: собственное уведомление через PlayerNotificationManager.
-                // Контроллер НЕ подключаем, иначе сервис начнёт публиковать ещё и своё
-                // системное уведомление → дубль/конфликт.
-                mediaControllerConnection.release()
+            applyNotificationMode(player)
+
+        } catch (e: Exception) {
+            logger.error("PlayerService", "Error setting up media session: ${e.message}", e)
+            // Не падаем при ошибке, просто логируем
+            // MediaSession будет настроен позже через onGetSession
+        }
+    }
+
+    /**
+     * Настраивает механизм уведомления под текущий режим [useSystemMediaPlayer] на
+     * существующей сессии (сессию НЕ пересоздаём — контроллер приложения остаётся
+     * подключённым). Подключением/отключением MediaController в системном режиме
+     * управляет [MediaControllerConnection] со стороны приложения.
+     *
+     * - системный: своё уведомление сервиса (DefaultMediaNotificationProvider);
+     *   публикуется, только когда подключён MediaController.
+     * - кастомный: PlayerNotificationManager; контроллер приложение не подключает,
+     *   поэтому системное уведомление сервиса не публикуется (нет дубля).
+     */
+    @Synchronized
+    private fun applyNotificationMode(player: Player) {
+        if (useSystemMediaPlayer) {
+            // Убираем кастомное уведомление, если было
+            try {
+                notificationManager?.setPlayer(null)
+            } catch (e: Exception) {
+                logger.warn("PlayerService", "applyNotificationMode: сброс PNM: ${e.message}")
+            }
+            notificationManager = null
+            setMediaNotificationProvider(
+                androidx.media3.session.DefaultMediaNotificationProvider.Builder(this)
+                    .setNotificationId(NOTIFICATION_ID)
+                    .setChannelId(channelId)
+                    .build()
+            )
+            logger.info("PlayerService", "Уведомление: системное (DefaultMediaNotificationProvider)")
+        } else {
+            if (notificationManager == null) {
                 notificationManager = PlayerNotificationManager.Builder(
                     this,
                     NOTIFICATION_ID,
@@ -192,46 +209,27 @@ class PlayerService : MediaSessionService() {
                     setUseRewindAction(true)
                     setUseNextAction(true)
                     setUsePreviousAction(true)
-                    setPlayer(player)
                 }
-                logger.info("PlayerService", "MediaSession: кастомное уведомление (PlayerNotificationManager)")
             }
-
-            configuredSystem = useSystemMediaPlayer
-
-        } catch (e: Exception) {
-            logger.error("PlayerService", "Error setting up media session: ${e.message}", e)
-            // Не падаем при ошибке, просто логируем
-            // MediaSession будет настроен позже через onGetSession
+            notificationManager?.setPlayer(player)
+            logger.info("PlayerService", "Уведомление: кастомное (PlayerNotificationManager)")
         }
+        configuredSystem = useSystemMediaPlayer
     }
 
     /**
-     * Пересоздаёт уведомление под текущий режим [useSystemMediaPlayer] без выхода из
-     * приложения. Пересоздаём сессию, чтобы был активен ровно один механизм уведомления,
-     * и в системном режиме переподключаем MediaController к новой сессии.
+     * Применяет смену режима уведомления на лету (без выхода из приложения):
+     * переключает механизм на существующей сессии.
      */
     @Synchronized
     private fun reconfigureNotification() {
-        try {
-            notificationManager?.setPlayer(null)
-        } catch (e: Exception) {
-            logger.warn("PlayerService", "reconfigure: ошибка сброса notificationManager: ${e.message}")
+        val session = mediaSession
+        if (session == null) {
+            setupMediaSession()
+            return
         }
-        notificationManager = null
-        try {
-            mediaSession?.release()
-        } catch (e: Exception) {
-            logger.warn("PlayerService", "reconfigure: ошибка release сессии: ${e.message}")
-        }
-        mediaSession = null
-        configuredSystem = null
-        // Сбрасываем контроллер: setupMediaSession подключит его заново только в системном режиме.
-        mediaControllerConnection.release()
-
-        setupMediaSession()
-
-        logger.info("PlayerService", "Уведомление пересоздано под режим useSystemMediaPlayer=$useSystemMediaPlayer")
+        applyNotificationMode(session.player)
+        logger.info("PlayerService", "Режим уведомления переключён на лету: useSystemMediaPlayer=$useSystemMediaPlayer")
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
@@ -249,7 +247,6 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
-        mediaControllerConnection.release()
         notificationManager?.setPlayer(null)
         mediaSession?.release()
         mediaSession = null

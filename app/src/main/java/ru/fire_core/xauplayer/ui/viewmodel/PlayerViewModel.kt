@@ -88,7 +88,8 @@ class PlayerViewModel @Inject constructor(
     private val streamUrlResolver: StreamUrlResolver,
     private val logger: AppLogger,
     private val settingsStore: SettingsStore,
-    val equalizerManager: ru.fire_core.xauplayer.player.EqualizerManager
+    val equalizerManager: ru.fire_core.xauplayer.player.EqualizerManager,
+    private val mediaControllerConnection: ru.fire_core.xauplayer.player.MediaControllerConnection
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlayerUiState(loading = true))
@@ -691,6 +692,9 @@ class PlayerViewModel @Inject constructor(
 
             val serviceIntent = Intent(context, PlayerService::class.java)
             context.startForegroundService(serviceIntent)
+            // Сообщаем коннектору о старте воспроизведения (он подключит MediaController
+            // в системном режиме — это активирует системное уведомление сервиса)
+            mediaControllerConnection.onPlaybackStarted()
 
             if (savedProgress != null && savedProgress.speed > 0) {
                 player.setPlaybackSpeed(savedProgress.speed)
@@ -825,6 +829,9 @@ class PlayerViewModel @Inject constructor(
             // Запускаем сервис для уведомлений (после получения плеера)
             val serviceIntent = Intent(context, PlayerService::class.java)
             context.startForegroundService(serviceIntent)
+            // Сообщаем коннектору о старте воспроизведения (он подключит MediaController
+            // в системном режиме — это активирует системное уведомление сервиса)
+            mediaControllerConnection.onPlaybackStarted()
             
             // Загружаем сохраненный прогресс
             val savedProgress = getProgress(book.id)
@@ -1329,6 +1336,7 @@ class PlayerViewModel @Inject constructor(
         // Запускаем сервис для уведомлений
         val serviceIntent = Intent(context, PlayerService::class.java)
         context.startForegroundService(serviceIntent)
+        mediaControllerConnection.onPlaybackStarted()
 
         holder.prepare(demo)
         holder.player().playWhenReady = true
