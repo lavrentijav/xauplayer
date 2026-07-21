@@ -29,9 +29,14 @@ class MediaControllerConnection @Inject constructor(
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
 
-    /** Подключает контроллер к сервису (идемпотентно). */
+    /** Подключает контроллер к сервису (идемпотентно; пересоздаёт при устаревшем). */
     fun connect() {
-        if (controllerFuture != null) return
+        val existing = controller
+        when {
+            existing != null && existing.isConnected -> return // уже подключён
+            existing != null -> release() // устаревший — пересоздаём
+            controllerFuture != null -> return // подключение уже идёт
+        }
         try {
             val token = SessionToken(context, ComponentName(context, PlayerService::class.java))
             val future = MediaController.Builder(context, token).buildAsync()
