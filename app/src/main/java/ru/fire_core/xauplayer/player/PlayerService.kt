@@ -10,7 +10,6 @@ import androidx.core.app.ServiceCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.CacheBitmapLoader
 import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -77,11 +76,9 @@ class PlayerService : MediaSessionService() {
         // синхронно. Загружаем обложки через тот же авторизованный OkHttpClient.
         try {
             val player = holder.player()
-            val bitmapLoader = CacheBitmapLoader(
-                DataSourceBitmapLoader(
-                    MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor()),
-                    OkHttpDataSource.Factory(okHttpClient)
-                )
+            val bitmapLoader = DataSourceBitmapLoader(
+                MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor()),
+                OkHttpDataSource.Factory(okHttpClient)
             )
             mediaSession = MediaSession.Builder(this, player)
                 .setBitmapLoader(bitmapLoader)
