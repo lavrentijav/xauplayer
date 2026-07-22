@@ -124,7 +124,8 @@ fun PlaybackSettingsDialog(
                 )
 
                 Text(
-                    "Использовать системный MediaStyle уведомление для отображения в шторке, на экране блокировки, Android Auto и умных часах",
+                    "Включено — системное MediaStyle уведомление с медиа-контролами в шторке, на экране блокировки, в Android Auto и на умных часах. " +
+                        "Выключено — обычное уведомление с кнопкой Play/Pause, без медиа-контролов и без показа на экране блокировки.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp)
