@@ -499,6 +499,11 @@ class DownloadManager @Inject constructor(
         return db.downloadedChapterDao().getByChapterId(chapterId)
     }
 
+    /** Число уже скачанных глав книги — для UI (есть ли что удалять). */
+    suspend fun downloadedChapterCount(bookId: Long): Int = withContext(Dispatchers.IO) {
+        db.downloadedChapterDao().countByBookId(bookId)
+    }
+
     private fun updateProgress(
         chapterId: Long,
         bookId: Long,

@@ -273,6 +273,7 @@ fun BooksTab(
         BookDetailDialog(
             book = b,
             vm = vm,
+            playerVm = playerVm,
             bookStatus = state.bookStatuses[b.id],
             onPlay = {
                 playerVm.addBook(b)
@@ -288,6 +289,7 @@ fun BooksTab(
         SeriesDetailDialog(
             seriesWithBooks = s,
             vm = vm,
+            playerVm = playerVm,
             onOpenBook = { bookForDetail = it },
             onDismiss = { seriesForDetail = null }
         )
