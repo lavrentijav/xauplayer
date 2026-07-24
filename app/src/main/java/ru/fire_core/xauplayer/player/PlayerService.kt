@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -12,11 +13,16 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -80,8 +86,17 @@ class PlayerService : MediaSessionService() {
                 MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor()),
                 OkHttpDataSource.Factory(okHttpClient)
             )
+            // Кнопка перемотки вперёд для системного MediaStyle-уведомления.
+            // В custom layout Media3 отображает только кнопки с кастомной SessionCommand,
+            // поэтому перемотку реализуем через кастомную команду, обрабатываемую в Callback.
+            val fastForwardButton = CommandButton.Builder(CommandButton.ICON_FAST_FORWARD)
+                .setSessionCommand(SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY))
+                .setDisplayName("Вперёд")
+                .build()
             mediaSession = MediaSession.Builder(this, player)
                 .setBitmapLoader(bitmapLoader)
+                .setCallback(MediaSessionCallback())
+                .setCustomLayout(ImmutableList.of(fastForwardButton))
                 .build()
             // Явно регистрируем сессию в сервисе. Приложение играет через общий
             // ExoPlayer напрямую и не создаёт MediaController, поэтому без addSession
@@ -268,7 +283,40 @@ class PlayerService : MediaSessionService() {
         return MediaNotification(NOTIFICATION_ID, notification)
     }
 
+    /**
+     * Callback сессии: выдаёт контроллерам право на кастомную команду перемотки
+     * вперёд и обрабатывает её нажатие из системного уведомления.
+     */
+    private inner class MediaSessionCallback : MediaSession.Callback {
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo
+        ): MediaSession.ConnectionResult {
+            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+                .buildUpon()
+                .add(SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY))
+                .build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(sessionCommands)
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == ACTION_SEEK_FORWARD) {
+                session.player.seekForward()
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            return super.onCustomCommand(session, controller, customCommand, args)
+        }
+    }
+
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val ACTION_SEEK_FORWARD = "ru.fire_core.xauplayer.SEEK_FORWARD"
     }
 }

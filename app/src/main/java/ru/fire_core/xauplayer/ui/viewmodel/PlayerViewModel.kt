@@ -1462,6 +1462,25 @@ class PlayerViewModel @Inject constructor(
         val chapters = _uiState.value.chapters
         return if (chapters.isEmpty()) false else downloadManager.isBookFullyDownloaded(chapters)
     }
+
+    /** Число скачанных глав книги (для отображения кнопки «Удалить» в браузере). */
+    suspend fun downloadedChapterCount(bookId: Long): Int =
+        downloadManager.downloadedChapterCount(bookId)
+
+    /**
+     * Отменяет активные и стоящие в очереди загрузки книги, опираясь на карту
+     * прогресса. В отличие от [cancelBookDownload], не требует, чтобы книга была
+     * выбрана в плеере — работает для любой книги из браузера.
+     */
+    fun cancelBookDownloadByProgress(bookId: Long) {
+        downloadManager.downloadProgress.value.values
+            .filter {
+                it.bookId == bookId &&
+                    (it.state == ru.fire_core.xauplayer.download.DownloadState.DOWNLOADING ||
+                        it.state == ru.fire_core.xauplayer.download.DownloadState.QUEUED)
+            }
+            .forEach { downloadManager.cancelDownload(it.chapterId) }
+    }
     
     suspend fun isBookDownloaded(bookId: Long): Boolean {
         val chapters = _uiState.value.chapters

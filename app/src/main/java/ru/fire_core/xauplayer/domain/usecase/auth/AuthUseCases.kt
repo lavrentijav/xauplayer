@@ -24,6 +24,10 @@ class SelectAccountUseCase @Inject constructor(private val repo: AuthRepository)
     suspend operator fun invoke(email: String): Boolean = repo.selectAccount(email)
 }
 
+class HasActiveSessionUseCase @Inject constructor(private val repo: AuthRepository) {
+    suspend operator fun invoke(): Boolean = repo.hasActiveSession()
+}
+
 class DeleteAccountUseCase @Inject constructor(private val repo: AuthRepository) {
     suspend operator fun invoke(email: String) = repo.deleteAccount(email)
 }

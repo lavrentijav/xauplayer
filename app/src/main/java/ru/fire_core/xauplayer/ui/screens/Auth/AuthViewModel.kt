@@ -17,6 +17,7 @@ import ru.fire_core.xauplayer.domain.usecase.auth.LoginUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.SaveTokensUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.RegisterUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.SelectAccountUseCase
+import ru.fire_core.xauplayer.domain.usecase.auth.HasActiveSessionUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.EnterServiceAccountUseCase
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import javax.inject.Inject
@@ -30,6 +31,7 @@ class AuthViewModel @Inject constructor(
     private val saveTokens: SaveTokensUseCase,
     private val getSavedAccounts: GetSavedAccountsUseCase,
     private val selectAccount: SelectAccountUseCase,
+    private val hasActiveSessionUseCase: HasActiveSessionUseCase,
     private val deleteAccount: DeleteAccountUseCase,
     private val enterServiceAccount: EnterServiceAccountUseCase,
     private val accountRepo: AccountRepository,
@@ -48,6 +50,13 @@ class AuthViewModel @Inject constructor(
     fun loadSavedAccounts() = viewModelScope.launch {
         _savedAccounts.value = getSavedAccounts()
     }
+
+    /**
+     * Уже есть активная сессия (сохранённые токены)? Если да — при запуске можно
+     * сразу открыть приложение, не выполняя повторный вход и обновление токена,
+     * из-за которого перезапускался сервис плеера.
+     */
+    suspend fun hasActiveSession(): Boolean = hasActiveSessionUseCase()
 
     fun register(email: String, password: String, name: String?) = viewModelScope.launch {
         _state.value = AuthState.Loading
