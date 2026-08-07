@@ -690,11 +690,8 @@ class PlayerViewModel @Inject constructor(
 
             val player = holder.player()
 
-            val serviceIntent = Intent(context, PlayerService::class.java)
-            context.startForegroundService(serviceIntent)
-            // Сообщаем коннектору о старте воспроизведения (он подключит MediaController
-            // в системном режиме — это активирует системное уведомление сервиса)
-            mediaControllerConnection.onPlaybackStarted()
+            // Запуск сервиса не должен прерывать подготовку главы (см. startPlayerServiceSafely).
+            startPlayerServiceSafely()
 
             if (savedProgress != null && savedProgress.speed > 0) {
                 player.setPlaybackSpeed(savedProgress.speed)
@@ -773,6 +770,34 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Запускает [PlayerService] для системного/кастомного уведомления и просит коннектор
+     * подключить MediaController.
+     *
+     * ВАЖНО: плеер живёт в [PlayerHolder] (это app-синглтон, а НЕ сервис), поэтому само
+     * воспроизведение не зависит от успеха запуска сервиса. При авто-переходе на следующую
+     * главу в фоне сервис в системном режиме мог выйти из foreground в STATE_ENDED — тогда
+     * повторный startForegroundService на Android 12+ бросает ForegroundServiceStartNotAllowedException.
+     * Раньше это исключение прерывало playChapter ДО holder.prepare(), и следующая глава не
+     * загружалась. Здесь запуск сервиса сделан НЕ фатальным: ошибку логируем и продолжаем —
+     * глава всё равно загрузится и заиграет, а уведомление восстановится, когда сервис
+     * переподключится на новом медиа.
+     */
+    private fun startPlayerServiceSafely() {
+        try {
+            val serviceIntent = Intent(context, PlayerService::class.java)
+            context.startForegroundService(serviceIntent)
+        } catch (e: Exception) {
+            logger.warn("PlayerViewModel", "startForegroundService не удался (вероятно, фон): ${e.message}", e)
+        }
+        // Коннектор системного уведомления тоже не критичен для воспроизведения.
+        try {
+            mediaControllerConnection.onPlaybackStarted()
+        } catch (e: Exception) {
+            logger.warn("PlayerViewModel", "onPlaybackStarted не удался: ${e.message}", e)
+        }
+    }
+
     fun playChapter(chapter: Chapter, book: Book, preferredSpeed: Float? = null) = viewModelScope.launch {
         // Предотвращаем множественные запуски
         if (isPlayingChapter) {
@@ -825,14 +850,11 @@ class PlayerViewModel @Inject constructor(
             
             // Получаем плеер до запуска сервиса, чтобы избежать блокировок
             val player = holder.player()
-            
-            // Запускаем сервис для уведомлений (после получения плеера)
-            val serviceIntent = Intent(context, PlayerService::class.java)
-            context.startForegroundService(serviceIntent)
-            // Сообщаем коннектору о старте воспроизведения (он подключит MediaController
-            // в системном режиме — это активирует системное уведомление сервиса)
-            mediaControllerConnection.onPlaybackStarted()
-            
+
+            // Запускаем сервис для уведомлений (после получения плеера). НЕ фатально:
+            // при авто-переходе в фоне сервис мог быть недоступен — глава всё равно должна заиграть.
+            startPlayerServiceSafely()
+
             // Загружаем сохраненный прогресс
             val savedProgress = getProgress(book.id)
             val speedToUse = preferredSpeed
@@ -1333,10 +1355,8 @@ class PlayerViewModel @Inject constructor(
         // Demo: play test stream if backend not available
         val demo = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
         
-        // Запускаем сервис для уведомлений
-        val serviceIntent = Intent(context, PlayerService::class.java)
-        context.startForegroundService(serviceIntent)
-        mediaControllerConnection.onPlaybackStarted()
+        // Запускаем сервис для уведомлений (не фатально).
+        startPlayerServiceSafely()
 
         holder.prepare(demo)
         holder.player().playWhenReady = true
