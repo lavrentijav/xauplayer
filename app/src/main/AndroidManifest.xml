@@ -26,20 +26,20 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground-сервис для воспроизведения аудио -->
+        <!-- Foreground-сервис для воспроизведения аудио (Media3 MediaSessionService).
+             Интент-фильтр с action androidx.media3.session.MediaSessionService и
+             exported="true" ОБЯЗАТЕЛЬНЫ: без них система не распознаёт сервис как
+             медиа-сессию, и системное уведомление / «сейчас играет» / медиа-кнопки
+             не работают. -->
         <service
             android:name=".player.PlayerService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
-
-        <!-- Обработчик кнопок гарнитуры (медиакнопок) -->
-        <receiver
-            android:name="androidx.media.session.MediaButtonReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
             <intent-filter>
-                <action android:name="android.intent.action.MEDIA_BUTTON" />
+                <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
-        </receiver>
+        </service>
 
         <!-- Приёмник для обработки звонков (пауза при входящем вызове) -->
         <receiver
