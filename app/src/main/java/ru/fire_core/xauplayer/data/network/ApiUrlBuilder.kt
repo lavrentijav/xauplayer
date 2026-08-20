@@ -28,6 +28,33 @@ object ApiUrlBuilder {
         return "$normalizedBase/$normalizedPath"
     }
 
+    /**
+     * Параметры, по которым узнаётся ссылка на объект хранилища, подписанная
+     * по AWS SigV4/SigV2 (S3, MinIO, совместимые CDN).
+     */
+    private val SIGNED_URL_PARAMS = listOf(
+        "X-Amz-Signature",
+        "X-Amz-Credential",
+        "X-Amz-Algorithm",
+        "AWSAccessKeyId"
+    )
+
+    /**
+     * Подписанная ссылка на объект хранилища.
+     *
+     * Такие URL самодостаточны и недолговечны: подпись покрывает хост, путь и query,
+     * поэтому им нельзя ни подменять адрес сервера, ни добавлять заголовок
+     * Authorization — хранилище ответит ошибкой, а наш API — 404 на чужой путь.
+     */
+    fun isSignedStorageUrl(url: String): Boolean {
+        val query = url.substringAfter('?', "")
+        if (query.isEmpty()) return false
+        return query.split('&').any { param ->
+            val name = param.substringBefore('=')
+            SIGNED_URL_PARAMS.any { it.equals(name, ignoreCase = true) }
+        }
+    }
+
     fun resolveAbsolute(baseUrl: String, urlOrPath: String): String {
         if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
             return urlOrPath

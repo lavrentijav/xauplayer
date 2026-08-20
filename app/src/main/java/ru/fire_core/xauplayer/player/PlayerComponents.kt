@@ -53,6 +53,7 @@ class PlayerHolder @Inject constructor(
         .build()
     
     private var playerListener: Player.Listener? = null
+    private var preparedUrl: String? = null
     
     init {
         // Добавляем обработчик ошибок для автоматического retry
@@ -140,12 +141,27 @@ class PlayerHolder @Inject constructor(
         }
 
         override fun getMinimumLoadableRetryCount(dataType: Int): Int {
-            // Продолжаем попытки до бесконечности
+            // Ограниченное число попыток: исчерпав их, плеер сообщит об ошибке,
+            // и приложение переоткроет поток по свежему URL. При бесконечных
+            // повторах глава молча зависала бы в буферизации на конце.
             return AppConfig.MAX_RETRY_ATTEMPTS
         }
     }
 
-    fun prepare(url: String, title: String = "XAuPlayer", artist: String? = null, coverUrl: String? = null) {
+    /**
+     * Готовит главу к воспроизведению.
+     *
+     * @param cacheKey стабильный ключ медиа-кэша. У подписанных ссылок хранилища
+     * query меняется при каждом запросе, поэтому кэш, ключом которого служит URL,
+     * не переиспользуется никогда — и каждая перемотка тянет данные заново.
+     */
+    fun prepare(
+        url: String,
+        title: String = "XAuPlayer",
+        artist: String? = null,
+        coverUrl: String? = null,
+        cacheKey: String? = null
+    ) {
         require(url.isNotBlank()) { "URL cannot be blank" }
         
         val mediaMetadata = androidx.media3.common.MediaMetadata.Builder()
@@ -169,10 +185,13 @@ class PlayerHolder @Inject constructor(
             throw IllegalArgumentException("Invalid URL: $url", e)
         }
         
-        val mediaItem = MediaItem.Builder()
+        val mediaItemBuilder = MediaItem.Builder()
             .setUri(uri)
             .setMediaMetadata(mediaMetadata)
-            .build()
+        if (!cacheKey.isNullOrBlank()) {
+            mediaItemBuilder.setCustomCacheKey(cacheKey)
+        }
+        val mediaItem = mediaItemBuilder.build()
         
         // Для локальных файлов используем DefaultDataSourceFactory, для HTTP - cacheDataSourceFactory
         val isLocalFile = url.startsWith("file://") || url.startsWith("/")
@@ -192,9 +211,13 @@ class PlayerHolder @Inject constructor(
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
             .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
             .createMediaSource(mediaItem)
+        preparedUrl = url
         exo.setMediaSource(mediaSource)
         exo.prepare()
     }
+
+    /** URL текущей подготовленной главы (нужен для диагностики и повторного открытия потока). */
+    fun currentUrl(): String? = preparedUrl
 
     fun player(): ExoPlayer = exo
     

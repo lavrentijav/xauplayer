@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -26,10 +27,61 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
 object NetworkInterceptors {
-    
+
+    /** Префикс путей публичного API (см. ApiConstants.API_PREFIX). */
+    private const val API_PATH_PREFIX = "/api/v1"
+
+    /** Хост плейсхолдера, с которым Retrofit собирает запросы до подмены base URL. */
+    private val placeholderHost: String? =
+        ru.fire_core.xauplayer.core.config.AppConfig.DEFAULT_API_BASE_URL.toHttpUrlOrNull()?.host
+
+    private fun isSignedStorageUrl(url: HttpUrl): Boolean =
+        ru.fire_core.xauplayer.data.network.ApiUrlBuilder.isSignedStorageUrl(url.toString())
+
+    /**
+     * Запрос адресован нашему серверу API (а не хранилищу/CDN).
+     * Только таким запросам можно подменять хост и подставлять Bearer-токен.
+     */
+    private fun isOwnApiRequest(url: HttpUrl, baseUrl: String): Boolean {
+        if (isSignedStorageUrl(url)) return false
+        val configuredHost = baseUrl.toHttpUrlOrNull()?.host
+        return url.host == configuredHost || url.host == placeholderHost
+    }
+
+    /**
+     * Запрос собран Retrofit'ом на плейсхолдере — только его хост подлежит подмене
+     * на адрес сервера из настроек. Абсолютные ссылки (presigned URL хранилища,
+     * медиа-сервер, CDN) приходят с уже правильным адресом и трогать их нельзя.
+     */
+    private fun isRewritableApiRequest(url: HttpUrl): Boolean {
+        if (isSignedStorageUrl(url)) return false
+        if (url.host != placeholderHost) return false
+        return url.encodedPath.startsWith(API_PATH_PREFIX)
+    }
+
+    /** Запрос/ответ с аудио: его не нужно гонять через HTTP-кэш OkHttp. */
+    private fun isMediaRequest(request: okhttp3.Request): Boolean =
+        request.header("Range") != null ||
+            request.url.encodedPath.contains("/stream/") ||
+            request.url.encodedPath.contains("/download/")
+
+    private fun isMediaResponse(response: Response): Boolean {
+        if (response.code == 206) return true
+        val type = response.header("Content-Type")?.lowercase() ?: return false
+        return type.startsWith("audio/") || type.startsWith("video/")
+    }
+
     /**
      * Создает interceptor для динамического изменения base URL из настроек
-     * Это позволяет менять URL без перезапуска приложения
+     * Это позволяет менять URL без перезапуска приложения.
+     *
+     * Подменяется хост ТОЛЬКО у запросов, собранных Retrofit'ом на плейсхолдере
+     * (AppConfig.DEFAULT_API_BASE_URL). Абсолютные ссылки, полученные от сервера —
+     * presigned URL хранилища (S3/MinIO), CDN, отдельный медиа-сервер — остаются
+     * нетронутыми: раньше им подменялся хост, и запрос за аудио уходил на API
+     * с чужим путём (`/<bucket>/<key>?X-Amz-...`), получая 404 {"detail":"Not Found"}.
+     * Скачивание при этом работало, потому что редирект 307 от /download/ обрабатывается
+     * внутри OkHttp — уже после application interceptors.
      */
     fun createBaseUrlInterceptor(networkCache: NetworkCache): Interceptor {
         return Interceptor { chain ->
@@ -38,6 +90,11 @@ object NetworkInterceptors {
             
             // Получаем текущий base URL из кэша (не блокирующий вызов)
             val baseUrl = networkCache.getBaseUrl()
+
+            // Чужой абсолютный URL (хранилище/CDN/медиа-сервер) — отдаём как есть
+            if (!isRewritableApiRequest(originalUrl)) {
+                return@Interceptor chain.proceed(originalRequest)
+            }
             
             // Парсим новый base URL используя java.net.URI и HttpUrl.Builder
             // Это работает во всех версиях OkHttp и избегает проблем с deprecated методами
@@ -179,9 +236,18 @@ object NetworkInterceptors {
         return """{"series_id":$id,"status":"$status"}"""
     }
 
+    /**
+     * Подставляет Bearer-токен, но только для запросов к нашему серверу API.
+     * На presigned-ссылки хранилища заголовок Authorization слать нельзя: подпись
+     * SigV4 уже лежит в query, а второй способ аутентификации S3/MinIO отклоняют.
+     * Заодно это защищает от утечки JWT на сторонний хост (CDN/хранилище).
+     */
     fun createAuthInterceptor(networkCache: NetworkCache): Interceptor {
         return Interceptor { chain ->
             val original = chain.request()
+            if (!isOwnApiRequest(original.url, networkCache.getBaseUrl())) {
+                return@Interceptor chain.proceed(original)
+            }
             // Получаем токен из кэша (не блокирующий вызов)
             val access = networkCache.getAccessToken()
             val builder = original.newBuilder()
@@ -203,6 +269,12 @@ object NetworkInterceptors {
         return Interceptor { chain ->
             val request = chain.request()
             val url = request.url.toString()
+
+            // Ответы хранилища/CDN не имеют отношения к нашей сессии: их 401/403
+            // не должны ни обновлять токен, ни выкидывать пользователя на экран входа.
+            if (!isOwnApiRequest(request.url, networkCache.getBaseUrl())) {
+                return@Interceptor chain.proceed(request)
+            }
             
             val isAuthEndpoint = url.contains("/auth/login") || 
                                 url.contains("/auth/refresh") || 
@@ -496,6 +568,11 @@ object NetworkInterceptors {
     fun createCacheInterceptor(): Interceptor {
         return Interceptor { chain ->
             val request = chain.request()
+            // Аудио идёт мимо HTTP-кэша OkHttp: у него свой кэш (SimpleCache в PlayerHolder),
+            // а подмена Cache-Control ломает докачку диапазонами (Range/206).
+            if (isMediaRequest(request)) {
+                return@Interceptor chain.proceed(request)
+            }
             val networkRequest = request.newBuilder()
                 .cacheControl(okhttp3.CacheControl.Builder()
                     .noCache()
@@ -522,7 +599,14 @@ object NetworkInterceptors {
     
     fun createNetworkCacheInterceptor(): Interceptor {
         return Interceptor { chain ->
-            val response = chain.proceed(chain.request())
+            val request = chain.request()
+            val response = chain.proceed(request)
+            // Аудио-ответы не кэшируем на уровне HTTP: 50 МБ дискового кэша OkHttp
+            // мгновенно вытесняются одной главой, а частичные ответы (206) кэшировать
+            // нельзя в принципе — иначе докачка диапазонами перестаёт работать.
+            if (isMediaRequest(request) || isMediaResponse(response)) {
+                return@Interceptor response
+            }
             response.newBuilder()
                 .header("Cache-Control", "public, max-age=3600")
                 .build()
