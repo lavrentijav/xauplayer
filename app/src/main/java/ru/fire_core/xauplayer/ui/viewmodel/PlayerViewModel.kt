@@ -159,21 +159,37 @@ class PlayerViewModel @Inject constructor(
 
     private var playerListenerSetup = false
     private var positionUpdateJob: Job? = null
-    
+
+    // Автопереход на следующую главу: защита от повторных срабатываний
+    // (STATE_ENDED, ошибка на конце главы и сторож зависшей буферизации
+    // могут прийти почти одновременно для одной и той же главы).
+    private var autoAdvanceInProgress = false
+    private var finishedChapterId: Long? = null
+
+    // Счётчик попыток переоткрыть поток после ошибки загрузки
+    private var streamRetryCount = 0
+    private var streamRetryJob: Job? = null
+
     private fun startPositionUpdates() {
         positionUpdateJob?.cancel()
         val player = holder.player()
         positionUpdateJob = viewModelScope.launch {
             // Получаем интервал обновления из настроек
             val updateInterval = settingsStore.positionUpdateInterval.first()
+            var stalledAtEndMs = 0L
             while (true) {
                 try {
+                    delay(updateInterval.toLong()) // Используем интервал из настроек
+                    // Плеер хочет играть, но не играет - идёт дозагрузка.
+                    // Такие такты нужны сторожу конца главы (см. ниже).
+                    val bufferingWhilePlaying = !player.isPlaying &&
+                        player.playWhenReady &&
+                        player.playbackState == Player.STATE_BUFFERING
                     // Обновляем только если играет - экономия батареи
-                    if (!player.isPlaying) {
-                        delay(updateInterval.toLong()) // Используем интервал из настроек
+                    if (!player.isPlaying && !bufferingWhilePlaying) {
+                        stalledAtEndMs = 0L
                         continue
                     }
-                    delay(updateInterval.toLong()) // Используем интервал из настроек
                     val currentPos = player.currentPosition
                     val dur = player.duration
                     if (dur != C.TIME_UNSET && currentPos != C.TIME_UNSET) {
@@ -181,6 +197,22 @@ class PlayerViewModel @Inject constructor(
                             currentPosition = currentPos,
                             duration = dur
                         )
+
+                        // Сторож конца главы: если дозагрузка зависла у самой концовки,
+                        // STATE_ENDED уже не придёт (обрыв соединения, протухшая ссылка,
+                        // усечённый ответ). Считаем главу доигранной и идём дальше сами,
+                        // иначе воспроизведение книги просто останавливается.
+                        val nearEnd = dur > 0 &&
+                            currentPos >= dur - ru.fire_core.xauplayer.core.config.AppConfig.END_OF_CHAPTER_THRESHOLD_MS
+                        if (bufferingWhilePlaying && nearEnd) {
+                            stalledAtEndMs += updateInterval.toLong()
+                            if (stalledAtEndMs >= ru.fire_core.xauplayer.core.config.AppConfig.END_OF_CHAPTER_STALL_TIMEOUT_MS) {
+                                stalledAtEndMs = 0L
+                                onChapterFinished("буферизация зависла на конце главы")
+                            }
+                        } else {
+                            stalledAtEndMs = 0L
+                        }
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     // Job был отменен (например, ViewModel уничтожен) - это нормально
@@ -191,6 +223,112 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Единая точка автоперехода на следующую главу.
+     * Вызывается из STATE_ENDED, из сторожа зависшей концовки и при ошибке
+     * на последних секундах главы. Повторные вызовы для одной главы игнорируются.
+     */
+    private fun onChapterFinished(reason: String) {
+        val chapterId = _uiState.value.selectedChapter?.id ?: return
+        // isPlayingChapter означает, что смена главы уже идёт: события от предыдущей
+        // главы, пришедшие в этот момент, привели бы к пропуску главы.
+        if (autoAdvanceInProgress || isPlayingChapter || finishedChapterId == chapterId) return
+        finishedChapterId = chapterId
+        autoAdvanceInProgress = true
+        logger.info("PlayerViewModel", "Chapter $chapterId finished ($reason), switching to next")
+        viewModelScope.launch {
+            try {
+                autoPlayNextChapter()
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to auto-play next chapter", e)
+            } finally {
+                autoAdvanceInProgress = false
+            }
+        }
+    }
+
+    /**
+     * Переоткрывает поток текущей главы после ошибки загрузки.
+     * URL запрашивается заново: подписанные ссылки хранилища живут около часа,
+     * и повтор по старому URL заведомо бесполезен.
+     */
+    private fun retryCurrentChapterAfterError() {
+        val book = _uiState.value.selectedBook ?: return
+        val chapter = _uiState.value.selectedChapter ?: return
+        if (streamRetryCount >= ru.fire_core.xauplayer.core.config.AppConfig.STREAM_RETRY_MAX_ATTEMPTS) {
+            logger.error("PlayerViewModel", "Stream retry limit reached for chapter ${chapter.id}")
+            _uiState.value = _uiState.value.copy(
+                isBuffering = false,
+                hasError = true,
+                errorMessage = "Не удалось загрузить аудио. Проверьте подключение и попробуйте снова"
+            )
+            return
+        }
+        val attempt = ++streamRetryCount
+        val delays = ru.fire_core.xauplayer.core.config.AppConfig.RETRY_DELAYS_MS
+        val retryDelay = delays[(attempt - 1).coerceAtMost(delays.size - 1)]
+
+        streamRetryJob?.cancel()
+        streamRetryJob = viewModelScope.launch {
+            val player = holder.player()
+            val resumePosition = player.currentPosition.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+            val wasPlaying = player.playWhenReady
+            delay(retryDelay)
+            try {
+                logger.info(
+                    "PlayerViewModel",
+                    "Reopening stream for chapter ${chapter.id} (attempt $attempt) at $resumePosition ms"
+                )
+                val audioUrl = resolveAudioUrl(book, chapter)
+                holder.prepare(
+                    url = audioUrl,
+                    title = chapter.title,
+                    artist = "${book.title} - ${book.author}",
+                    coverUrl = resolveCoverUrl(book),
+                    cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
+                )
+                if (resumePosition > 0) {
+                    player.seekTo(resumePosition)
+                }
+                // Если за время паузы перед повтором пользователь остановил
+                // воспроизведение, не возобновляем его самовольно
+                player.playWhenReady = wasPlaying
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to reopen stream", e)
+                _uiState.value = _uiState.value.copy(
+                    hasError = true,
+                    errorMessage = "Ошибка воспроизведения: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * URL аудио главы: локальный файл, если глава скачана, иначе поток с сервера.
+     */
+    private suspend fun resolveAudioUrl(book: Book, chapter: Chapter): String {
+        val downloadedChapter = downloadManager.getDownloadedChapter(chapter.id)
+        val localFile = downloadedChapter?.let { java.io.File(it.localPath) }
+        if (localFile != null && localFile.exists()) {
+            logger.info("PlayerViewModel", "Using downloaded chapter: ${localFile.absolutePath}")
+            return android.net.Uri.fromFile(localFile).toString()
+        }
+        val streamUrl = streamUrlResolver.resolve(book.id, chapter.id)
+        logger.info("PlayerViewModel", "Using stream URL: $streamUrl")
+        return streamUrl
+    }
+
+    private suspend fun resolveCoverUrl(book: Book): String? = try {
+        // Пытаемся получить кэшированную обложку
+        coverManager.getBookCoverUrlForDisplay(book.id)
+    } catch (e: Exception) {
+        // Если не удалось, используем URL (но в офлайн режиме может не загрузиться)
+        logger.warn("PlayerViewModel", "Failed to get cached cover, using URL", e)
+        coverManager.getBookCoverUrl(book.id)
     }
     
     private fun setupPlayerListener() {
@@ -203,7 +341,9 @@ class PlayerViewModel @Inject constructor(
         startPositionUpdates()
         
         player.addListener(object : Player.Listener {
-            override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
+            // Используем не устаревший onPlayerStateChanged, а актуальную пару колбэков:
+            // onPlaybackStateChanged + onPlayWhenReadyChanged.
+            override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
                         _uiState.value = _uiState.value.copy(
@@ -215,6 +355,8 @@ class PlayerViewModel @Inject constructor(
                     Player.STATE_READY -> {
                         val currentPos = player.currentPosition
                         val dur = player.duration
+                        // Поток открылся - счётчик повторных попыток можно обнулить
+                        streamRetryCount = 0
                         _uiState.value = _uiState.value.copy(
                             isBuffering = false,
                             hasError = false,
@@ -228,7 +370,7 @@ class PlayerViewModel @Inject constructor(
                     Player.STATE_IDLE -> {
                         // Если плеер в состоянии IDLE, но не воспроизводится, это нормально
                         // Но если была ошибка, покажем её
-                        if (!playWhenReady) {
+                        if (!player.playWhenReady) {
                             _uiState.value = _uiState.value.copy(isBuffering = false)
                         }
                     }
@@ -238,9 +380,7 @@ class PlayerViewModel @Inject constructor(
                             isPlaying = false
                         )
                         // Автоматический переход на следующую главу
-                        viewModelScope.launch {
-                            autoPlayNextChapter()
-                        }
+                        onChapterFinished("STATE_ENDED")
                     }
                 }
             }
@@ -249,16 +389,29 @@ class PlayerViewModel @Inject constructor(
                 // Логируем ошибку
                 logger.error(
                     tag = "PlayerViewModel",
-                    message = "Player error: ${error.message}",
+                    message = "Player error: ${error.message} (${error.errorCodeName}), url=${holder.currentUrl()}",
                     throwable = error
                 )
-                // ExoPlayer автоматически повторяет попытки, но показываем состояние
+
+                // Ошибка на последних секундах главы = глава фактически доиграна.
+                // Не застреваем на ней, а переходим к следующей.
+                val pos = player.currentPosition
+                val dur = player.duration
+                val nearEnd = dur != C.TIME_UNSET && dur > 0 && pos != C.TIME_UNSET &&
+                    pos >= dur - ru.fire_core.xauplayer.core.config.AppConfig.END_OF_CHAPTER_THRESHOLD_MS
+                if (nearEnd) {
+                    _uiState.value = _uiState.value.copy(isBuffering = false, isPlaying = false)
+                    onChapterFinished("ошибка на конце главы: ${error.errorCodeName}")
+                    return
+                }
+
                 _uiState.value = _uiState.value.copy(
                     isBuffering = true, // Показываем что идет загрузка/повтор
                     hasError = true,
                     errorMessage = "Загрузка аудио... Продолжаем попытки подключения"
                 )
-                // Продолжаем попытки - ExoPlayer делает это автоматически
+                // Переоткрываем поток по свежему URL (подписанная ссылка могла протухнуть)
+                retryCurrentChapterAfterError()
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -694,7 +847,8 @@ class PlayerViewModel @Inject constructor(
                 url = audioUrl,
                 title = chapter.title,
                 artist = "${book.title} - ${book.author}",
-                coverUrl = coverUrl
+                coverUrl = coverUrl,
+                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
             )
             
             // Перематываем на сохраненную позицию, если есть
@@ -750,13 +904,27 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun playChapter(chapter: Chapter, book: Book, preferredSpeed: Float? = null) = viewModelScope.launch {
+    /**
+     * @param force игнорировать защиту от повторных запусков. Нужен автопереходу:
+     * пропустить переход на следующую главу из-за взведённого флага нельзя —
+     * книга просто перестанет играть.
+     */
+    fun playChapter(
+        chapter: Chapter,
+        book: Book,
+        preferredSpeed: Float? = null,
+        force: Boolean = false
+    ) = viewModelScope.launch {
         // Предотвращаем множественные запуски
-        if (isPlayingChapter) {
+        if (isPlayingChapter && !force) {
             logger.warn("PlayerViewModel", "Already playing a chapter, ignoring request")
             return@launch
         }
         isPlayingChapter = true
+        // Новая глава - сбрасываем состояние автоперехода и повторных попыток
+        finishedChapterId = null
+        streamRetryCount = 0
+        streamRetryJob?.cancel()
         
         try {
             // Проверяем наличие локальной копии
@@ -835,7 +1003,8 @@ class PlayerViewModel @Inject constructor(
                 url = audioUrl,
                 title = chapter.title,
                 artist = "${book.title} - ${book.author}",
-                coverUrl = coverUrl
+                coverUrl = coverUrl,
+                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
             )
 
             _uiState.value = _uiState.value.copy(
@@ -965,6 +1134,7 @@ class PlayerViewModel @Inject constructor(
         progressSyncJob?.cancel()
         progressBufferJob?.cancel()
         positionUpdateJob?.cancel()
+        streamRetryJob?.cancel()
         // Отправляем буферизованный прогресс при закрытии
         viewModelScope.launch {
             try {
@@ -983,16 +1153,44 @@ class PlayerViewModel @Inject constructor(
     }
     
     private suspend fun autoPlayNextChapter() {
-        val currentBook = _uiState.value.selectedBook ?: return
-        val currentChapter = _uiState.value.selectedChapter ?: return
-        val chapters = _uiState.value.chapters
+        val currentBook = _uiState.value.selectedBook ?: run {
+            logger.warn("PlayerViewModel", "No selected book, cannot auto-play next chapter")
+            return
+        }
+        val currentChapter = _uiState.value.selectedChapter ?: run {
+            logger.warn("PlayerViewModel", "No selected chapter, cannot auto-play next chapter")
+            return
+        }
         val currentSpeed = _uiState.value.playbackSpeed
+
+        // Список глав в состоянии мог остаться от другой книги (или вообще не успеть
+        // загрузиться, если воспроизведение начали не с экрана плеера) — тогда берём
+        // главы книги из базы, иначе автопереход молча ничего не делает.
+        var chapters = _uiState.value.chapters
+        if (chapters.none { it.id == currentChapter.id }) {
+            chapters = try {
+                getChapters(currentBook.id)
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to load chapters for book ${currentBook.id}", e)
+                emptyList()
+            }
+            if (chapters.isNotEmpty()) {
+                _uiState.value = _uiState.value.copy(chapters = chapters)
+            }
+        }
 
         val currentIndex = chapters.indexOfFirst { it.id == currentChapter.id }
         if (currentIndex >= 0 && currentIndex < chapters.size - 1) {
             val nextChapter = chapters[currentIndex + 1]
             logger.info("PlayerViewModel", "Auto-playing next chapter: ${nextChapter.title}")
-            playChapter(nextChapter, currentBook)
+            playChapter(nextChapter, currentBook, preferredSpeed = currentSpeed, force = true)
+            return
+        }
+        if (currentIndex < 0) {
+            logger.warn(
+                "PlayerViewModel",
+                "Chapter ${currentChapter.id} not found in book ${currentBook.id}, auto-advance skipped"
+            )
             return
         }
 
@@ -1028,7 +1226,7 @@ class PlayerViewModel @Inject constructor(
             playbackSpeed = currentSpeed
         )
         settingsStore.setLastBookId(nextBook.id)
-        playChapter(firstChapter, nextBook, preferredSpeed = currentSpeed)
+        playChapter(firstChapter, nextBook, preferredSpeed = currentSpeed, force = true)
     }
 
     fun seekTo(positionMs: Long) {
