@@ -264,7 +264,7 @@ object AppConfig {
     const val DEFAULT_ACCENT_COLOR = "#FF4D6D" // как --accent в веб-клиенте
     
     /** Цвет плеера по умолчанию (Spotify green) */
-    const val DEFAULT_PLAYER_COLOR = "#1DB954"
+    const val DEFAULT_PLAYER_COLOR = "#FF4D6D"
     
     
     // ========== Пути и файлы ==========

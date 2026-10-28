@@ -93,7 +93,7 @@ fun LoginScreen(
                 Icon(
                     Icons.Default.Settings,
                     contentDescription = "Настройки",
-                    tint = Color(0xFF1DB954)
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
         }
@@ -137,7 +137,7 @@ fun LoginScreen(
             
             Button(
                 onClick = { showNewLogin = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1DB954)),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Войти в другой аккаунт")
@@ -197,7 +197,7 @@ fun LoginScreen(
                     viewModel.login(email, password, device, rememberMe)
                 },
                 enabled = !loading && email.isNotBlank() && password.length >= 4,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1DB954)),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (loading) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)

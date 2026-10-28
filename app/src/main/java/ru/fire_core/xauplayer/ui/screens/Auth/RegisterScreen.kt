@@ -131,12 +131,12 @@ fun RegisterScreen(
                 Icon(
                     Icons.Default.Settings,
                     contentDescription = "Настройки",
-                    tint = Color(0xFF1DB954)
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
         }
         
-        Text("XAuPlayer", fontSize = 36.sp, color = Color(0xFF1DB954), fontWeight = FontWeight.Black)
+        Text("XAuPlayer", fontSize = 36.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(48.dp))
         OutlinedTextField(
             value = email,
@@ -144,10 +144,10 @@ fun RegisterScreen(
             label = { Text("Email") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             colors = TextFieldDefaults.colors(
-                focusedIndicatorColor = Color(0xFF1DB954),
+                focusedIndicatorColor = MaterialTheme.colorScheme.primary,
                 unfocusedIndicatorColor = Color.Gray,
-                focusedLabelColor = Color(0xFF1DB954),
-                cursorColor = Color(0xFF1DB954)
+                focusedLabelColor = MaterialTheme.colorScheme.primary,
+                cursorColor = MaterialTheme.colorScheme.primary
             )
         )
 
@@ -171,7 +171,7 @@ fun RegisterScreen(
                 viewModel.register(email, password, name.ifBlank { null })
             },
             enabled = !loading && email.isNotBlank() && password.length >= 4,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1DB954)),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             modifier = Modifier.fillMaxWidth()
         ) {
             if (loading) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
@@ -183,7 +183,7 @@ fun RegisterScreen(
         }
         Spacer(Modifier.height(24.dp))
         TextButton(onClick = { onNavigateToLogin() }) {
-            Text("Уже есть аккаунт? Войти", color = Color(0xFF1DB954))
+            Text("Уже есть аккаунт? Войти", color = MaterialTheme.colorScheme.primary)
         }
     }
 }
