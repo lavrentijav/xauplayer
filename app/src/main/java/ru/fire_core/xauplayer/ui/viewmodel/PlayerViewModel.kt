@@ -112,7 +112,32 @@ class PlayerViewModel @Inject constructor(
     private var cacheInvalidationTime: Long = 0
     private val cacheValidityDuration = ru.fire_core.xauplayer.core.config.AppConfig.BOOKS_LIST_CACHE_VALIDITY_DURATION_MS
 
+    private val chapterNavigation = object : ru.fire_core.xauplayer.player.ChapterNavigation {
+        private fun index(): Int {
+            val s = _uiState.value
+            val cur = s.selectedChapter ?: return -1
+            return s.chapters.indexOfFirst { it.id == cur.id }
+        }
+        override fun hasNext() = index().let { it >= 0 && it < _uiState.value.chapters.size - 1 }
+        override fun hasPrevious() = index() >= 0
+        override fun next() {
+            val s = _uiState.value
+            val i = index()
+            val book = s.selectedBook ?: return
+            if (i >= 0 && i < s.chapters.size - 1) playChapter(s.chapters[i + 1], book)
+        }
+        override fun previous() {
+            val s = _uiState.value
+            val i = index()
+            val book = s.selectedBook ?: return
+            // Как в плеерах: если глава уже идёт больше 3 секунд — в её начало, иначе на предыдущую
+            if (i > 0 && holder.player().currentPosition < 3000L) playChapter(s.chapters[i - 1], book)
+            else seekTo(0L)
+        }
+    }
+
     init {
+        holder.chapterNavigation = chapterNavigation
         loadBooks()
         startProgressTracking()
         viewModelScope.launch {
@@ -964,6 +989,7 @@ class PlayerViewModel @Inject constructor(
     
     override fun onCleared() {
         super.onCleared()
+        if (holder.chapterNavigation === chapterNavigation) holder.chapterNavigation = null
         progressSyncJob?.cancel()
         progressBufferJob?.cancel()
         positionUpdateJob?.cancel()

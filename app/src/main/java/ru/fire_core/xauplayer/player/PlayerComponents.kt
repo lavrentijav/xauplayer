@@ -29,6 +29,14 @@ import ru.fire_core.xauplayer.core.config.AppConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Переключение глав для системных контролов (шторка, экран блокировки, гарнитура). Реализует PlayerViewModel. */
+interface ChapterNavigation {
+    fun hasNext(): Boolean
+    fun hasPrevious(): Boolean
+    fun next()
+    fun previous()
+}
+
 @Singleton
 class PlayerHolder @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -53,6 +61,9 @@ class PlayerHolder @Inject constructor(
         .build()
     
     private var playerListener: Player.Listener? = null
+
+    /** Выставляется PlayerViewModel; PlayerService маппит на него кнопки «следующая/предыдущая». */
+    @Volatile var chapterNavigation: ChapterNavigation? = null
     
     init {
         // Добавляем обработчик ошибок для автоматического retry
