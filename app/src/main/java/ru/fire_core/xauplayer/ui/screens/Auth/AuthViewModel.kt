@@ -17,6 +17,7 @@ import ru.fire_core.xauplayer.domain.usecase.auth.LoginUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.SaveTokensUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.RegisterUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.SelectAccountUseCase
+import ru.fire_core.xauplayer.domain.usecase.auth.HasActiveSessionUseCase
 import ru.fire_core.xauplayer.domain.usecase.auth.EnterServiceAccountUseCase
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import javax.inject.Inject
@@ -27,9 +28,11 @@ sealed class AuthState { object Idle : AuthState(); object Loading : AuthState()
 class AuthViewModel @Inject constructor(
     private val registerUseCase: RegisterUseCase,
     private val loginUseCase: LoginUseCase,
+    private val securityNotices: ru.fire_core.xauplayer.core.security.SecurityNoticeStore,
     private val saveTokens: SaveTokensUseCase,
     private val getSavedAccounts: GetSavedAccountsUseCase,
     private val selectAccount: SelectAccountUseCase,
+    private val hasActiveSessionUseCase: HasActiveSessionUseCase,
     private val deleteAccount: DeleteAccountUseCase,
     private val enterServiceAccount: EnterServiceAccountUseCase,
     private val accountRepo: AccountRepository,
@@ -48,6 +51,13 @@ class AuthViewModel @Inject constructor(
     fun loadSavedAccounts() = viewModelScope.launch {
         _savedAccounts.value = getSavedAccounts()
     }
+
+    /**
+     * Уже есть активная сессия (сохранённые токены)? Если да — при запуске можно
+     * сразу открыть приложение, не выполняя повторный вход и обновление токена,
+     * из-за которого перезапускался сервис плеера.
+     */
+    suspend fun hasActiveSession(): Boolean = hasActiveSessionUseCase()
 
     fun register(email: String, password: String, name: String?) = viewModelScope.launch {
         _state.value = AuthState.Loading
@@ -77,6 +87,7 @@ class AuthViewModel @Inject constructor(
         try {
             logger.info("AuthViewModel", "Attempting to login user: $email, rememberMe: $rememberMe")
             val resp = loginUseCase(email, password, device)
+            securityNotices.post(resp.security_notice)
             // Сначала сохраняем токены, чтобы они были доступны для последующих запросов
             saveTokens(resp.access_token, resp.refresh_token, resp.device_id, email, resp.device_id, null, if (rememberMe) password else null)
             

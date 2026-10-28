@@ -3,6 +3,7 @@ package ru.fire_core.xauplayer
 import android.app.Application
 import android.util.Log
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.launch
 import dagger.hilt.android.EntryPointAccessors
 import ru.fire_core.xauplayer.core.logger.AppLogger
 import ru.fire_core.xauplayer.data.datastore.SettingsStore
@@ -95,6 +96,11 @@ class XAuPlayerApp : Application() {
             }
             Log.d("XAuPlayerApp", "[3/4] Обработчик исключений установлен")
             
+            // Если ОС очистила кэш приложения — сбрасываем и кэш библиотеки (Room), см. CacheManager
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                entryPoint.cacheManager().onAppStart()
+            }
+
             Log.d("XAuPlayerApp", "=== XAuPlayerApp.onCreate() END ===")
         } catch (e: Exception) {
             Log.e("XAuPlayerApp", "=== КРИТИЧЕСКАЯ ОШИБКА в XAuPlayerApp.onCreate() ===")

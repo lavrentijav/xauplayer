@@ -46,11 +46,21 @@ fun RegisterScreen(
     LaunchedEffect(Unit) {
         if (!autoLoginAttempted) {
             autoLoginAttempted = true
+
+            // Быстрый путь: если сессия уже активна (токены сохранены с прошлого
+            // запуска) — сразу открываем приложение, не выполняя повторный вход и
+            // обновление токена. Иначе на каждом запуске переоткрывалась сессия и
+            // перезапускался сервис плеера. Истёкший токен обновится лениво по 401.
+            if (viewModel.hasActiveSession()) {
+                onAutoLoginSuccess()
+                return@LaunchedEffect
+            }
+
             viewModel.loadSavedAccounts()
-            
+
             // Даем время загрузить аккаунты
             kotlinx.coroutines.delay(ru.fire_core.xauplayer.core.config.AppConfig.ANIMATION_DELAY_MS)
-            
+
             // Проверяем наличие последнего успешного входа
             if (savedAccounts.isNotEmpty()) {
                 val lastAccount = savedAccounts.maxByOrNull { it.lastLogin }
@@ -131,12 +141,12 @@ fun RegisterScreen(
                 Icon(
                     Icons.Default.Settings,
                     contentDescription = "Настройки",
-                    tint = Color(0xFF1DB954)
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
         }
         
-        Text("XAuPlayer", fontSize = 36.sp, color = Color(0xFF1DB954), fontWeight = FontWeight.Black)
+        Text("XAuPlayer", fontSize = 36.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(48.dp))
         OutlinedTextField(
             value = email,
@@ -144,10 +154,10 @@ fun RegisterScreen(
             label = { Text("Email") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
             colors = TextFieldDefaults.colors(
-                focusedIndicatorColor = Color(0xFF1DB954),
+                focusedIndicatorColor = MaterialTheme.colorScheme.primary,
                 unfocusedIndicatorColor = Color.Gray,
-                focusedLabelColor = Color(0xFF1DB954),
-                cursorColor = Color(0xFF1DB954)
+                focusedLabelColor = MaterialTheme.colorScheme.primary,
+                cursorColor = MaterialTheme.colorScheme.primary
             )
         )
 
@@ -171,7 +181,7 @@ fun RegisterScreen(
                 viewModel.register(email, password, name.ifBlank { null })
             },
             enabled = !loading && email.isNotBlank() && password.length >= 4,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1DB954)),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             modifier = Modifier.fillMaxWidth()
         ) {
             if (loading) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
@@ -183,7 +193,7 @@ fun RegisterScreen(
         }
         Spacer(Modifier.height(24.dp))
         TextButton(onClick = { onNavigateToLogin() }) {
-            Text("Уже есть аккаунт? Войти", color = Color(0xFF1DB954))
+            Text("Уже есть аккаунт? Войти", color = MaterialTheme.colorScheme.primary)
         }
     }
 }

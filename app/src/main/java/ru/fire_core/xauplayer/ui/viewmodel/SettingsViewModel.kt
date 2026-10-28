@@ -14,7 +14,8 @@ import javax.inject.Inject
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsStore: SettingsStore,
-    private val authRepository: ru.fire_core.xauplayer.domain.repo.AuthRepository
+    private val authRepository: ru.fire_core.xauplayer.domain.repo.AuthRepository,
+    private val cacheManager: ru.fire_core.xauplayer.data.cache.CacheManager
 ) : ViewModel() {
 
     val baseUrl: StateFlow<String> = settingsStore.baseUrl.stateIn(
@@ -28,6 +29,14 @@ class SettingsViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(AppConfig.STATE_FLOW_SUBSCRIPTION_TIMEOUT_MS),
         initialValue = AppConfig.DEFAULT_UPDATE_URL
     )
+
+    /** Очистить кэш (HTTP, обложки, медиа, библиотека). Скачанные книги, прогресс и заметки не трогаем. */
+    fun clearCache(onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            cacheManager.clearAll()
+            onDone()
+        }
+    }
 
     val showLogs: StateFlow<Boolean> = settingsStore.showLogs.stateIn(
         scope = viewModelScope,

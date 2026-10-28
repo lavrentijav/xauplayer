@@ -66,6 +66,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
+import ru.fire_core.xauplayer.ui.components.SeekBar
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -119,6 +120,20 @@ fun PlayerTab(
     onShowPlayerModalChange: (Boolean) -> Unit = {}
 ) {
     val state by vm.uiState.collectAsState()
+
+    // Скачанная книга изменилась на сервере — спрашиваем, обновить ли локальную копию
+    if (state.pendingChapterUpdates.isNotEmpty()) {
+        val count = state.pendingChapterUpdates.size
+        AlertDialog(
+            onDismissRequest = { vm.dismissUpdateDownloads() },
+            title = { Text("Обновить скачанную книгу?") },
+            text = {
+                Text("На сервере изменились или добавились главы: $count. Обновить локальную копию? Изменённые главы будут скачаны заново.")
+            },
+            confirmButton = { TextButton(onClick = { vm.confirmUpdateDownloads() }) { Text("Обновить") } },
+            dismissButton = { TextButton(onClick = { vm.dismissUpdateDownloads() }) { Text("Не сейчас") } }
+        )
+    }
 
     // Загружаем книги с прогрессом при открытии плеера
     LaunchedEffect(Unit) {
@@ -1117,47 +1132,17 @@ fun FullScreenPlayerContent(
                                         )
                                     }
                                     
-                                    // Прогресс-бар под обложкой
-                                    if (state.duration > 0) {
-                                        val currentPos = state.currentPosition.coerceIn(0, state.duration)
-                                        val progress = if (state.duration > 0) currentPos.toFloat() / state.duration.toFloat() else 0f
-                                        val speed = state.playbackSpeed.coerceAtLeast(0.1f)
-                                        val realCurrentTime = (currentPos / speed).toLong()
-                                        val remaining = ((state.duration - currentPos) / speed).toLong()
-
-                                        Spacer(modifier = Modifier.height(8.dp))
-
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Text(
-                                                text = formatTime(realCurrentTime),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = Color.White
-                                            )
-                                            Text(
-                                                text = "-${formatTime(remaining)}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = Color.White
-                                            )
-                                        }
-
-                                        Slider(
-                                            value = progress,
-                                            onValueChange = { newProgress ->
-                                                val newPosition = (newProgress * state.duration).toLong()
-                                                vm.seekTo(newPosition)
-                                            },
-                                            valueRange = 0f..1f,
-                                            colors = SliderDefaults.colors(
-                                                thumbColor = Color.White,
-                                                activeTrackColor = Color.White,
-                                                inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                                            ),
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
+                                    // Прогресс-бар под обложкой (времена — под ползунком, без наложения)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    SeekBar(
+                                        positionMs = state.currentPosition,
+                                        durationMs = state.duration,
+                                        speed = state.playbackSpeed,
+                                        onSeek = { vm.seekTo(it) },
+                                        textColor = Color.White,
+                                        activeColor = Color.White,
+                                        inactiveColor = Color.White.copy(alpha = 0.3f)
+                                    )
                                 }
                             }
                         }
@@ -1402,26 +1387,16 @@ fun FullScreenPlayerContent(
                                 
                                 
                                 
-                                // Прогресс-бар
-                                if (state.duration > 0) {
-                                    val currentPos = state.currentPosition.coerceIn(0, state.duration)
-                                    val progress = if (state.duration > 0) currentPos.toFloat() / state.duration.toFloat() else 0f
-                                    val speed = state.playbackSpeed.coerceAtLeast(0.1f)
-                                    val realCurrentTime = (currentPos / speed).toLong()
-                                    val remaining = ((state.duration - currentPos) / speed).toLong()
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text(formatTime(realCurrentTime), style = MaterialTheme.typography.bodyMedium, color = Color.White)
-                                        Text("-${formatTime(remaining)}", style = MaterialTheme.typography.bodyMedium, color = Color.White)
-                                    }
-                                    Slider(
-                                        value = progress,
-                                        onValueChange = { vm.seekTo((it * state.duration).toLong()) },
-                                        valueRange = 0f..1f,
-                                        colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.3f)),
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
+                                // Прогресс-бар (времена — под ползунком, без наложения)
+                                SeekBar(
+                                    positionMs = state.currentPosition,
+                                    durationMs = state.duration,
+                                    speed = state.playbackSpeed,
+                                    onSeek = { vm.seekTo(it) },
+                                    textColor = Color.White,
+                                    activeColor = Color.White,
+                                    inactiveColor = Color.White.copy(alpha = 0.3f)
+                                )
                             }
                         }
                     }

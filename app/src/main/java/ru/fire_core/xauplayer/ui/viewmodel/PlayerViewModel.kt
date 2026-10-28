@@ -50,6 +50,7 @@ data class PlayerUiState(
     val books: List<Book> = emptyList(), // Только книги с прогрессом
     val selectedBook: Book? = null,
     val chapters: List<Chapter> = emptyList(),
+    val pendingChapterUpdates: List<Chapter> = emptyList(), // Изменившиеся на сервере главы скачанной книги (ждём решения)
     val selectedChapter: Chapter? = null,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false, // Буферизация аудио
@@ -84,6 +85,7 @@ class PlayerViewModel @Inject constructor(
     private val downloadManager: ru.fire_core.xauplayer.download.DownloadManager,
     private val seriesUseCases: SeriesUseCases,
     private val statusUseCases: StatusUseCases,
+    private val booksRepository: ru.fire_core.xauplayer.domain.repo.BooksRepository,
     private val coverManager: CoverManager,
     private val streamUrlResolver: StreamUrlResolver,
     private val logger: AppLogger,
@@ -110,7 +112,32 @@ class PlayerViewModel @Inject constructor(
     private var cacheInvalidationTime: Long = 0
     private val cacheValidityDuration = ru.fire_core.xauplayer.core.config.AppConfig.BOOKS_LIST_CACHE_VALIDITY_DURATION_MS
 
+    private val chapterNavigation = object : ru.fire_core.xauplayer.player.ChapterNavigation {
+        private fun index(): Int {
+            val s = _uiState.value
+            val cur = s.selectedChapter ?: return -1
+            return s.chapters.indexOfFirst { it.id == cur.id }
+        }
+        override fun hasNext() = index().let { it >= 0 && it < _uiState.value.chapters.size - 1 }
+        override fun hasPrevious() = index() >= 0
+        override fun next() {
+            val s = _uiState.value
+            val i = index()
+            val book = s.selectedBook ?: return
+            if (i >= 0 && i < s.chapters.size - 1) playChapter(s.chapters[i + 1], book)
+        }
+        override fun previous() {
+            val s = _uiState.value
+            val i = index()
+            val book = s.selectedBook ?: return
+            // Как в плеерах: если глава уже идёт больше 3 секунд — в её начало, иначе на предыдущую
+            if (i > 0 && holder.player().currentPosition < 3000L) playChapter(s.chapters[i - 1], book)
+            else seekTo(0L)
+        }
+    }
+
     init {
+        holder.chapterNavigation = chapterNavigation
         loadBooks()
         startProgressTracking()
         viewModelScope.launch {
@@ -159,21 +186,42 @@ class PlayerViewModel @Inject constructor(
 
     private var playerListenerSetup = false
     private var positionUpdateJob: Job? = null
-    
+
+    // Автопереход на следующую главу: защита от повторных срабатываний
+    // (STATE_ENDED, ошибка на конце главы и сторож зависшей буферизации
+    // могут прийти почти одновременно для одной и той же главы).
+    private var autoAdvanceInProgress = false
+    private var finishedChapterId: Long? = null
+
+    // Счётчик попыток переоткрыть поток после ошибки загрузки
+    private var streamRetryCount = 0
+    private var streamRetryJob: Job? = null
+
     private fun startPositionUpdates() {
         positionUpdateJob?.cancel()
         val player = holder.player()
         positionUpdateJob = viewModelScope.launch {
-            // Получаем интервал обновления из настроек
-            val updateInterval = settingsStore.positionUpdateInterval.first()
+            // Для плавного ползунка используем частый фиксированный интервал (не из настроек):
+            // это только чтение позиции и обновление StateFlow, без ввода-вывода.
+            val updateInterval = ru.fire_core.xauplayer.core.config.AppConfig.UI_POSITION_POLL_INTERVAL_MS
+            var stalledAtEndMs = 0L
             while (true) {
                 try {
+                    delay(updateInterval.toLong()) // Используем интервал из настроек
+                    // Плеер хочет играть, но не играет - идёт дозагрузка.
+                    // Такие такты нужны сторожу конца главы (см. ниже).
+                    val bufferingWhilePlaying = !player.isPlaying &&
+                        player.playWhenReady &&
+                        player.playbackState == Player.STATE_BUFFERING
+                    // Страховка от пропущенного события: звук идёт, а UI считает, что нет
+                    if (player.isPlaying && !_uiState.value.isPlaying) {
+                        _uiState.value = _uiState.value.copy(isPlaying = true, isBuffering = false)
+                    }
                     // Обновляем только если играет - экономия батареи
-                    if (!player.isPlaying) {
-                        delay(updateInterval.toLong()) // Используем интервал из настроек
+                    if (!player.isPlaying && !bufferingWhilePlaying) {
+                        stalledAtEndMs = 0L
                         continue
                     }
-                    delay(updateInterval.toLong()) // Используем интервал из настроек
                     val currentPos = player.currentPosition
                     val dur = player.duration
                     if (dur != C.TIME_UNSET && currentPos != C.TIME_UNSET) {
@@ -181,6 +229,22 @@ class PlayerViewModel @Inject constructor(
                             currentPosition = currentPos,
                             duration = dur
                         )
+
+                        // Сторож конца главы: если дозагрузка зависла у самой концовки,
+                        // STATE_ENDED уже не придёт (обрыв соединения, протухшая ссылка,
+                        // усечённый ответ). Считаем главу доигранной и идём дальше сами,
+                        // иначе воспроизведение книги просто останавливается.
+                        val nearEnd = dur > 0 &&
+                            currentPos >= dur - ru.fire_core.xauplayer.core.config.AppConfig.END_OF_CHAPTER_THRESHOLD_MS
+                        if (bufferingWhilePlaying && nearEnd) {
+                            stalledAtEndMs += updateInterval.toLong()
+                            if (stalledAtEndMs >= ru.fire_core.xauplayer.core.config.AppConfig.END_OF_CHAPTER_STALL_TIMEOUT_MS) {
+                                stalledAtEndMs = 0L
+                                onChapterFinished("буферизация зависла на конце главы")
+                            }
+                        } else {
+                            stalledAtEndMs = 0L
+                        }
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     // Job был отменен (например, ViewModel уничтожен) - это нормально
@@ -192,6 +256,112 @@ class PlayerViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * Единая точка автоперехода на следующую главу.
+     * Вызывается из STATE_ENDED, из сторожа зависшей концовки и при ошибке
+     * на последних секундах главы. Повторные вызовы для одной главы игнорируются.
+     */
+    private fun onChapterFinished(reason: String) {
+        val chapterId = _uiState.value.selectedChapter?.id ?: return
+        // isPlayingChapter означает, что смена главы уже идёт: события от предыдущей
+        // главы, пришедшие в этот момент, привели бы к пропуску главы.
+        if (autoAdvanceInProgress || isPlayingChapter || finishedChapterId == chapterId) return
+        finishedChapterId = chapterId
+        autoAdvanceInProgress = true
+        logger.info("PlayerViewModel", "Chapter $chapterId finished ($reason), switching to next")
+        viewModelScope.launch {
+            try {
+                autoPlayNextChapter()
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to auto-play next chapter", e)
+            } finally {
+                autoAdvanceInProgress = false
+            }
+        }
+    }
+
+    /**
+     * Переоткрывает поток текущей главы после ошибки загрузки.
+     * URL запрашивается заново: подписанные ссылки хранилища живут около часа,
+     * и повтор по старому URL заведомо бесполезен.
+     */
+    private fun retryCurrentChapterAfterError() {
+        val book = _uiState.value.selectedBook ?: return
+        val chapter = _uiState.value.selectedChapter ?: return
+        if (streamRetryCount >= ru.fire_core.xauplayer.core.config.AppConfig.STREAM_RETRY_MAX_ATTEMPTS) {
+            logger.error("PlayerViewModel", "Stream retry limit reached for chapter ${chapter.id}")
+            _uiState.value = _uiState.value.copy(
+                isBuffering = false,
+                hasError = true,
+                errorMessage = "Не удалось загрузить аудио. Проверьте подключение и попробуйте снова"
+            )
+            return
+        }
+        val attempt = ++streamRetryCount
+        val delays = ru.fire_core.xauplayer.core.config.AppConfig.RETRY_DELAYS_MS
+        val retryDelay = delays[(attempt - 1).coerceAtMost(delays.size - 1)]
+
+        streamRetryJob?.cancel()
+        streamRetryJob = viewModelScope.launch {
+            val player = holder.player()
+            val resumePosition = player.currentPosition.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+            val wasPlaying = player.playWhenReady
+            delay(retryDelay)
+            try {
+                logger.info(
+                    "PlayerViewModel",
+                    "Reopening stream for chapter ${chapter.id} (attempt $attempt) at $resumePosition ms"
+                )
+                val audioUrl = resolveAudioUrl(book, chapter)
+                holder.prepare(
+                    url = audioUrl,
+                    title = chapter.title,
+                    artist = "${book.title} - ${book.author}",
+                    coverUrl = resolveCoverUrl(book),
+                    cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
+                )
+                if (resumePosition > 0) {
+                    player.seekTo(resumePosition)
+                }
+                // Если за время паузы перед повтором пользователь остановил
+                // воспроизведение, не возобновляем его самовольно
+                player.playWhenReady = wasPlaying
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to reopen stream", e)
+                _uiState.value = _uiState.value.copy(
+                    hasError = true,
+                    errorMessage = "Ошибка воспроизведения: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * URL аудио главы: локальный файл, если глава скачана, иначе поток с сервера.
+     */
+    private suspend fun resolveAudioUrl(book: Book, chapter: Chapter): String {
+        val downloadedChapter = downloadManager.getDownloadedChapter(chapter.id)
+        val localFile = downloadedChapter?.let { java.io.File(it.localPath) }
+        if (localFile != null && localFile.exists()) {
+            logger.info("PlayerViewModel", "Using downloaded chapter: ${localFile.absolutePath}")
+            return android.net.Uri.fromFile(localFile).toString()
+        }
+        val streamUrl = streamUrlResolver.resolve(book.id, chapter.id)
+        logger.info("PlayerViewModel", "Using stream URL: $streamUrl")
+        return streamUrl
+    }
+
+    private suspend fun resolveCoverUrl(book: Book): String? = try {
+        // Пытаемся получить кэшированную обложку
+        coverManager.getBookCoverUrlForDisplay(book.id)
+    } catch (e: Exception) {
+        // Если не удалось, используем URL (но в офлайн режиме может не загрузиться)
+        logger.warn("PlayerViewModel", "Failed to get cached cover, using URL", e)
+        coverManager.getBookCoverUrl(book.id)
+    }
     
     private fun setupPlayerListener() {
         if (playerListenerSetup) return // Настраиваем только один раз
@@ -202,8 +372,10 @@ class PlayerViewModel @Inject constructor(
         // Запускаем обновления позиции (будет обновлять только когда играет)
         startPositionUpdates()
         
-        player.addListener(object : Player.Listener {
-            override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
+        val listener = object : Player.Listener {
+            // Используем не устаревший onPlayerStateChanged, а актуальную пару колбэков:
+            // onPlaybackStateChanged + onPlayWhenReadyChanged.
+            override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_BUFFERING -> {
                         _uiState.value = _uiState.value.copy(
@@ -215,6 +387,8 @@ class PlayerViewModel @Inject constructor(
                     Player.STATE_READY -> {
                         val currentPos = player.currentPosition
                         val dur = player.duration
+                        // Поток открылся - счётчик повторных попыток можно обнулить
+                        streamRetryCount = 0
                         _uiState.value = _uiState.value.copy(
                             isBuffering = false,
                             hasError = false,
@@ -228,7 +402,7 @@ class PlayerViewModel @Inject constructor(
                     Player.STATE_IDLE -> {
                         // Если плеер в состоянии IDLE, но не воспроизводится, это нормально
                         // Но если была ошибка, покажем её
-                        if (!playWhenReady) {
+                        if (!player.playWhenReady) {
                             _uiState.value = _uiState.value.copy(isBuffering = false)
                         }
                     }
@@ -238,9 +412,7 @@ class PlayerViewModel @Inject constructor(
                             isPlaying = false
                         )
                         // Автоматический переход на следующую главу
-                        viewModelScope.launch {
-                            autoPlayNextChapter()
-                        }
+                        onChapterFinished("STATE_ENDED")
                     }
                 }
             }
@@ -249,21 +421,52 @@ class PlayerViewModel @Inject constructor(
                 // Логируем ошибку
                 logger.error(
                     tag = "PlayerViewModel",
-                    message = "Player error: ${error.message}",
+                    message = "Player error: ${error.message} (${error.errorCodeName}), url=${holder.currentUrl()}",
                     throwable = error
                 )
-                // ExoPlayer автоматически повторяет попытки, но показываем состояние
+
+                // Ошибка на последних секундах главы = глава фактически доиграна.
+                // Не застреваем на ней, а переходим к следующей.
+                val pos = player.currentPosition
+                val dur = player.duration
+                val nearEnd = dur != C.TIME_UNSET && dur > 0 && pos != C.TIME_UNSET &&
+                    pos >= dur - ru.fire_core.xauplayer.core.config.AppConfig.END_OF_CHAPTER_THRESHOLD_MS
+                if (nearEnd) {
+                    _uiState.value = _uiState.value.copy(isBuffering = false, isPlaying = false)
+                    onChapterFinished("ошибка на конце главы: ${error.errorCodeName}")
+                    return
+                }
+
                 _uiState.value = _uiState.value.copy(
                     isBuffering = true, // Показываем что идет загрузка/повтор
                     hasError = true,
                     errorMessage = "Загрузка аудио... Продолжаем попытки подключения"
                 )
-                // Продолжаем попытки - ExoPlayer делает это автоматически
+                // Переоткрываем поток по свежему URL (подписанная ссылка могла протухнуть)
+                retryCurrentChapterAfterError()
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                // Используем РЕАЛЬНОЕ состояние воспроизведения (не намерение playWhenReady),
+                // чтобы кнопка play/pause и ползунок совпадали со звуком.
+                _uiState.value = _uiState.value.copy(isPlaying = isPlaying)
+                if (isPlaying) {
+                    // Перезапускаем плавные обновления позиции и сразу подтягиваем позицию
+                    startPositionUpdates()
+                    val pos = player.currentPosition
+                    val dur = player.duration
+                    if (pos != C.TIME_UNSET) {
+                        _uiState.value = _uiState.value.copy(
+                            currentPosition = pos,
+                            duration = if (dur != C.TIME_UNSET) dur else _uiState.value.duration
+                        )
+                    }
+                }
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                _uiState.value = _uiState.value.copy(isPlaying = playWhenReady)
-                // Перезапускаем обновления позиции при изменении состояния воспроизведения
+                // Намерение играть: обновляем позицию, но состояние isPlaying берём из
+                // onIsPlayingChanged (реальное воспроизведение).
                 if (playWhenReady) {
                     startPositionUpdates()
                 }
@@ -273,7 +476,37 @@ class PlayerViewModel @Inject constructor(
                 // Обновляем скорость в UI при изменении
                 _uiState.value = _uiState.value.copy(playbackSpeed = playbackParameters.speed)
             }
-        })
+        }
+        playerListener = listener
+        player.addListener(listener)
+
+        // Плеер общий (singleton) и живёт дольше ViewModel: если звук уже идёт (приложение открыли заново
+        // при работающем сервисе, пересоздана активность), события onIsPlayingChanged не придут —
+        // они сообщают только об ИЗМЕНЕНИЯХ. Поэтому состояние берём из плеера сразу.
+        syncStateFromPlayer()
+    }
+
+    private var playerListener: Player.Listener? = null
+
+    /**
+     * Подтягивает состояние UI из реального плеера. Нужен при (пере)создании ViewModel и как страховка
+     * от пропущенных событий: звук идёт, а кнопка показывает «не играет».
+     */
+    private fun syncStateFromPlayer() {
+        val player = holder.player()
+        val state = _uiState.value
+        val playing = player.isPlaying
+        val buffering = player.playbackState == Player.STATE_BUFFERING
+        val pos = player.currentPosition
+        val dur = player.duration
+        _uiState.value = state.copy(
+            isPlaying = playing || (state.isPlaying && player.playWhenReady && buffering),
+            isBuffering = buffering && player.playWhenReady,
+            playbackSpeed = player.playbackParameters.speed,
+            currentPosition = if (pos != C.TIME_UNSET && (playing || state.currentPosition == 0L)) pos else state.currentPosition,
+            duration = if (dur != C.TIME_UNSET && dur > 0) dur else state.duration
+        )
+        if (playing) startPositionUpdates()
     }
 
     private fun startProgressTracking() {
@@ -520,23 +753,23 @@ class PlayerViewModel @Inject constructor(
                     // Но если есть загруженные главы, они будут доступны через DownloadedChapter
                 }
             } else {
-                // Если главы есть локально, проверяем нужно ли синхронизировать (только если есть интернет)
-                val needsSync = shouldSyncChapters(book.id)
-                if (needsSync) {
-                    logger.info("PlayerViewModel", "Syncing chapters for book ${book.id} from server (shouldSync=true)")
-                    try {
-                        syncChapters(book.id, force = false)
-                        chapters = getChapters(book.id) // Обновляем список после синхронизации
-                    } catch (e: Exception) {
-                        logger.warn("PlayerViewModel", "Failed to sync chapters for book ${book.id} (offline mode?), using existing chapters", e)
-                        // Используем существующие главы при ошибке (офлайн режим)
+                // Главы есть в кэше: показываем их сразу, а при каждом входе в книгу делаем запрос;
+                // успех — кэш перезаписывается, ошибка (офлайн) — остаётся прежний список
+                try {
+                    if (syncChapters(book.id, force = true)) {
+                        chapters = getChapters(book.id)
                     }
-                } else {
-                    logger.info("PlayerViewModel", "Skipping chapters sync for book ${book.id} (shouldSync=false)")
+                } catch (e: Exception) {
+                    logger.warn("PlayerViewModel", "Failed to sync chapters for book ${book.id} (offline mode?), using cached chapters", e)
                 }
             }
             
-            _uiState.value = _uiState.value.copy(chapters = chapters, loading = false)
+            _uiState.value = _uiState.value.copy(
+                chapters = chapters,
+                loading = false,
+                // Если у книги есть скачанная копия, а на сервере главы изменились/добавились — спросим пользователя
+                pendingChapterUpdates = booksRepository.takePendingDownloadUpdates(book.id)
+            )
             
             // Сохраняем последнюю выбранную книгу
             settingsStore.setLastBookId(book.id)
@@ -670,8 +903,8 @@ class PlayerViewModel @Inject constructor(
 
             val player = holder.player()
 
-            val serviceIntent = Intent(context, PlayerService::class.java)
-            context.startForegroundService(serviceIntent)
+            // Запуск сервиса не должен прерывать подготовку главы (см. startPlayerServiceSafely).
+            startPlayerServiceSafely()
 
             if (savedProgress != null && savedProgress.speed > 0) {
                 player.setPlaybackSpeed(savedProgress.speed)
@@ -694,7 +927,8 @@ class PlayerViewModel @Inject constructor(
                 url = audioUrl,
                 title = chapter.title,
                 artist = "${book.title} - ${book.author}",
-                coverUrl = coverUrl
+                coverUrl = coverUrl,
+                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
             )
             
             // Перематываем на сохраненную позицию, если есть
@@ -750,13 +984,44 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun playChapter(chapter: Chapter, book: Book, preferredSpeed: Float? = null) = viewModelScope.launch {
+    /**
+     * Запускает [PlayerService] (уведомление плеера, системные контролы).
+     *
+     * ВАЖНО: плеер живёт в [PlayerHolder] (app-синглтон), поэтому воспроизведение не зависит от
+     * успеха запуска сервиса. При автопереходе на следующую главу в фоне повторный
+     * startForegroundService на Android 12+ может бросить ForegroundServiceStartNotAllowedException.
+     * Раньше это исключение прерывало playChapter ДО holder.prepare(), и следующая глава не загружалась.
+     * Здесь запуск НЕ фатален: ошибку логируем и продолжаем.
+     */
+    private fun startPlayerServiceSafely() {
+        try {
+            context.startForegroundService(Intent(context, PlayerService::class.java))
+        } catch (e: Exception) {
+            logger.warn("PlayerViewModel", "startForegroundService не удался (вероятно, фон): ${e.message}", e)
+        }
+    }
+
+    /**
+     * @param force игнорировать защиту от повторных запусков. Нужен автопереходу:
+     * пропустить переход на следующую главу из-за взведённого флага нельзя —
+     * книга просто перестанет играть.
+     */
+    fun playChapter(
+        chapter: Chapter,
+        book: Book,
+        preferredSpeed: Float? = null,
+        force: Boolean = false
+    ) = viewModelScope.launch {
         // Предотвращаем множественные запуски
-        if (isPlayingChapter) {
+        if (isPlayingChapter && !force) {
             logger.warn("PlayerViewModel", "Already playing a chapter, ignoring request")
             return@launch
         }
         isPlayingChapter = true
+        // Новая глава - сбрасываем состояние автоперехода и повторных попыток
+        finishedChapterId = null
+        streamRetryCount = 0
+        streamRetryJob?.cancel()
         
         try {
             // Проверяем наличие локальной копии
@@ -802,11 +1067,11 @@ class PlayerViewModel @Inject constructor(
             
             // Получаем плеер до запуска сервиса, чтобы избежать блокировок
             val player = holder.player()
-            
-            // Запускаем сервис для уведомлений (после получения плеера)
-            val serviceIntent = Intent(context, PlayerService::class.java)
-            context.startForegroundService(serviceIntent)
-            
+
+            // Запускаем сервис для уведомлений (после получения плеера). НЕ фатально:
+            // при авто-переходе в фоне сервис мог быть недоступен — глава всё равно должна заиграть.
+            startPlayerServiceSafely()
+
             // Загружаем сохраненный прогресс
             val savedProgress = getProgress(book.id)
             val speedToUse = preferredSpeed
@@ -835,7 +1100,8 @@ class PlayerViewModel @Inject constructor(
                 url = audioUrl,
                 title = chapter.title,
                 artist = "${book.title} - ${book.author}",
-                coverUrl = coverUrl
+                coverUrl = coverUrl,
+                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
             )
 
             _uiState.value = _uiState.value.copy(
@@ -962,9 +1228,13 @@ class PlayerViewModel @Inject constructor(
     
     override fun onCleared() {
         super.onCleared()
+        playerListener?.let { holder.player().removeListener(it) }
+        playerListener = null
+        if (holder.chapterNavigation === chapterNavigation) holder.chapterNavigation = null
         progressSyncJob?.cancel()
         progressBufferJob?.cancel()
         positionUpdateJob?.cancel()
+        streamRetryJob?.cancel()
         // Отправляем буферизованный прогресс при закрытии
         viewModelScope.launch {
             try {
@@ -983,16 +1253,44 @@ class PlayerViewModel @Inject constructor(
     }
     
     private suspend fun autoPlayNextChapter() {
-        val currentBook = _uiState.value.selectedBook ?: return
-        val currentChapter = _uiState.value.selectedChapter ?: return
-        val chapters = _uiState.value.chapters
+        val currentBook = _uiState.value.selectedBook ?: run {
+            logger.warn("PlayerViewModel", "No selected book, cannot auto-play next chapter")
+            return
+        }
+        val currentChapter = _uiState.value.selectedChapter ?: run {
+            logger.warn("PlayerViewModel", "No selected chapter, cannot auto-play next chapter")
+            return
+        }
         val currentSpeed = _uiState.value.playbackSpeed
+
+        // Список глав в состоянии мог остаться от другой книги (или вообще не успеть
+        // загрузиться, если воспроизведение начали не с экрана плеера) — тогда берём
+        // главы книги из базы, иначе автопереход молча ничего не делает.
+        var chapters = _uiState.value.chapters
+        if (chapters.none { it.id == currentChapter.id }) {
+            chapters = try {
+                getChapters(currentBook.id)
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to load chapters for book ${currentBook.id}", e)
+                emptyList()
+            }
+            if (chapters.isNotEmpty()) {
+                _uiState.value = _uiState.value.copy(chapters = chapters)
+            }
+        }
 
         val currentIndex = chapters.indexOfFirst { it.id == currentChapter.id }
         if (currentIndex >= 0 && currentIndex < chapters.size - 1) {
             val nextChapter = chapters[currentIndex + 1]
             logger.info("PlayerViewModel", "Auto-playing next chapter: ${nextChapter.title}")
-            playChapter(nextChapter, currentBook)
+            playChapter(nextChapter, currentBook, preferredSpeed = currentSpeed, force = true)
+            return
+        }
+        if (currentIndex < 0) {
+            logger.warn(
+                "PlayerViewModel",
+                "Chapter ${currentChapter.id} not found in book ${currentBook.id}, auto-advance skipped"
+            )
             return
         }
 
@@ -1028,7 +1326,7 @@ class PlayerViewModel @Inject constructor(
             playbackSpeed = currentSpeed
         )
         settingsStore.setLastBookId(nextBook.id)
-        playChapter(firstChapter, nextBook, preferredSpeed = currentSpeed)
+        playChapter(firstChapter, nextBook, preferredSpeed = currentSpeed, force = true)
     }
 
     fun seekTo(positionMs: Long) {
@@ -1307,10 +1605,9 @@ class PlayerViewModel @Inject constructor(
         // Demo: play test stream if backend not available
         val demo = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
         
-        // Запускаем сервис для уведомлений
-        val serviceIntent = Intent(context, PlayerService::class.java)
-        context.startForegroundService(serviceIntent)
-        
+        // Запускаем сервис для уведомлений (не фатально).
+        startPlayerServiceSafely()
+
         holder.prepare(demo)
         holder.player().playWhenReady = true
         _uiState.value = _uiState.value.copy(isPlaying = true)
@@ -1318,6 +1615,26 @@ class PlayerViewModel @Inject constructor(
 
     // === Методы для загрузки глав ===
     
+    /** Пользователь согласился обновить локальную копию: перекачиваем изменившиеся и новые главы. */
+    fun confirmUpdateDownloads() = viewModelScope.launch {
+        val book = _uiState.value.selectedBook ?: return@launch
+        val updates = _uiState.value.pendingChapterUpdates
+        _uiState.value = _uiState.value.copy(pendingChapterUpdates = emptyList())
+        updates.forEach { chapter ->
+            try {
+                // Старый файл удаляем, иначе загрузка может посчитать главу уже скачанной
+                if (isChapterDownloaded(chapter.id)) deleteDownloadedChapter(chapter.id).join()
+                downloadManager.downloadChapter(chapter, book.id)
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to update downloaded chapter ${chapter.id}", e)
+            }
+        }
+    }
+
+    fun dismissUpdateDownloads() {
+        _uiState.value = _uiState.value.copy(pendingChapterUpdates = emptyList())
+    }
+
     fun downloadChapter(chapter: Chapter, bookId: Long) {
         try {
             logger.info("PlayerViewModel", "Starting download of chapter ${chapter.id}")
@@ -1461,6 +1778,25 @@ class PlayerViewModel @Inject constructor(
     suspend fun isBookFullyDownloaded(bookId: Long): Boolean {
         val chapters = _uiState.value.chapters
         return if (chapters.isEmpty()) false else downloadManager.isBookFullyDownloaded(chapters)
+    }
+
+    /** Число скачанных глав книги (для отображения кнопки «Удалить» в браузере). */
+    suspend fun downloadedChapterCount(bookId: Long): Int =
+        downloadManager.downloadedChapterCount(bookId)
+
+    /**
+     * Отменяет активные и стоящие в очереди загрузки книги, опираясь на карту
+     * прогресса. В отличие от [cancelBookDownload], не требует, чтобы книга была
+     * выбрана в плеере — работает для любой книги из браузера.
+     */
+    fun cancelBookDownloadByProgress(bookId: Long) {
+        downloadManager.downloadProgress.value.values
+            .filter {
+                it.bookId == bookId &&
+                    (it.state == ru.fire_core.xauplayer.download.DownloadState.DOWNLOADING ||
+                        it.state == ru.fire_core.xauplayer.download.DownloadState.QUEUED)
+            }
+            .forEach { downloadManager.cancelDownload(it.chapterId) }
     }
     
     suspend fun isBookDownloaded(bookId: Long): Boolean {

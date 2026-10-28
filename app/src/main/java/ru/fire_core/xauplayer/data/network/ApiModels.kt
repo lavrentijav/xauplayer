@@ -3,7 +3,7 @@ package ru.fire_core.xauplayer.data.network
 data class RegisterRequest(val email: String, val password: String, val name: String? = null)
 data class RegisterResponse(val id: Long, val email: String, val name: String?)
 data class LoginRequest(val email: String, val password: String, val device_name: String)
-data class LoginResponse(val access_token: String, val refresh_token: String, val token_type: String = "bearer", val device_id: Long)
+data class LoginResponse(val access_token: String, val refresh_token: String, val token_type: String = "bearer", val device_id: Long, val security_notice: String? = null)
 data class TokenResponse(val access_token: String, val refresh_token: String, val token_type: String = "bearer", val device_id: Long = 0)
 data class RefreshRequest(val refresh_token: String)
 
@@ -134,7 +134,8 @@ data class StatusesResponse(
 )
 
 data class StreamTokenResponse(
-    val url: String,
+    // Может отсутствовать: при сегментированном воспроизведении сервер отдаёт "type": "parts"
+    val url: String? = null,
     val type: String? = null,
     val stream_token: String? = null,
     val expires_in: Int? = null

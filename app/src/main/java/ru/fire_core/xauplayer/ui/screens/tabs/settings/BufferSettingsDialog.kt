@@ -47,7 +47,7 @@ fun BufferSettingsDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "Буферизация аудио",
+                        "Буферизация и кэш",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -116,6 +116,22 @@ fun BufferSettingsDialog(
                     ) {
                         Text("Сохранить буферизацию после")
                     }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+
+                Text("Кэш", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "Сбрасывает кэш запросов, обложек, потокового аудио и списка библиотеки. " +
+                        "Скачанные книги, прогресс и заметки остаются. Кэш также можно очистить в настройках Android.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                var cacheCleared by remember { mutableStateOf(false) }
+                OutlinedButton(
+                    onClick = { viewModel.clearCache { cacheCleared = true } },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                ) {
+                    Text(if (cacheCleared) "Кэш очищен" else "Очистить кэш")
                 }
             }
         }

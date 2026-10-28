@@ -66,7 +66,7 @@ object AppModule {
     ): OkHttpClient {
         logger.debug("AppModule", "[DI] Создание OkHttpClient...")
         // Кэш для офлайн работы
-        val cacheDir = File(settingsStore.basepath, "http_cache")
+        val cacheDir = File(context.cacheDir, "http_cache")
         val cacheSize = AppConfig.DEFAULT_MEDIA_CACHE_SIZE_BYTES
         val cache = Cache(cacheDir, cacheSize)
         logger.debug("AppModule", "[DI] HTTP кэш создан")
@@ -76,6 +76,15 @@ object AppModule {
         // Он будет доступен через Lazy или Provider, если понадобится
         return OkHttpClient.Builder()
             .cache(cache)
+            // Отпечаток устройства — на каждый запрос (серверный бан нарушителей по устройству)
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .header(ru.fire_core.xauplayer.core.security.DeviceFingerprint.HEADER,
+                            ru.fire_core.xauplayer.core.security.DeviceFingerprint.get(context))
+                        .build()
+                )
+            }
             // Base URL interceptor должен быть первым, чтобы изменять URL перед другими interceptors
             .addInterceptor(NetworkInterceptors.createBaseUrlInterceptor(networkCache))
             // Оффлайн-интерцептор: эмулирует ответы сервера в служебном/оффлайн-режиме

@@ -27,7 +27,7 @@ class CoverManager @Inject constructor(
     private val settingsStore: SettingsStore,
     private val logger: AppLogger
 ) {
-    private val coversDir = File(settingsStore.basepath, "covers")
+    private val coversDir = File(context.cacheDir, "covers")
     private val backgroundScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     init {
@@ -36,6 +36,11 @@ class CoverManager @Inject constructor(
         }
     }
     
+    /** Полностью удаляет кэш обложек. */
+    fun clearCache() {
+        coversDir.listFiles()?.forEach { it.deleteRecursively() }
+    }
+
     /**
      * Очищает старые обложки, если размер кэша превышает лимит
      * Использует LRU стратегию - удаляет самые старые файлы

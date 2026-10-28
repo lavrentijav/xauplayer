@@ -37,6 +37,7 @@ fun SettingsTab(
     var showSecuritySettings by remember { mutableStateOf(false) }
     var showDevicesSettings by remember { mutableStateOf(false) }
     var showAboutSettings by remember { mutableStateOf(false) }
+    var showAdmin by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showLogsScreen by remember { mutableStateOf(false) }
     
@@ -184,6 +185,12 @@ fun SettingsTab(
                             description = "Версия, информация",
                             onClick = { showAboutSettings = true }
                         )
+
+                        SettingsButton(
+                            title = "Администрирование",
+                            description = "Только для администратора сервера",
+                            onClick = { showAdmin = true }
+                        )
                     }
                 }
             }
@@ -252,6 +259,10 @@ fun SettingsTab(
                 accountViewModel = accountViewModel,
                 onDismiss = { showDevicesSettings = false }
             )
+        }
+
+        if (showAdmin) {
+            AdminDialog(onDismiss = { showAdmin = false })
         }
 
         if (showAboutSettings) {

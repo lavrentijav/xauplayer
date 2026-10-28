@@ -31,6 +31,7 @@ import ru.fire_core.xauplayer.ui.viewmodel.SeriesWithBooks
 fun SeriesDetailDialog(
     seriesWithBooks: SeriesWithBooks,
     vm: BooksViewModel,
+    playerVm: ru.fire_core.xauplayer.ui.viewmodel.PlayerViewModel,
     onOpenBook: (Book) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -118,7 +119,12 @@ fun SeriesDetailDialog(
                     Spacer(Modifier.height(8.dp))
 
                     seriesWithBooks.books.forEach { book ->
-                        SeriesBookRow(book = book, vm = vm, onClick = { onOpenBook(book) })
+                        SeriesBookRow(
+                            book = book,
+                            vm = vm,
+                            playerVm = playerVm,
+                            onClick = { onOpenBook(book) }
+                        )
                         Spacer(Modifier.height(8.dp))
                     }
                 }
@@ -128,7 +134,12 @@ fun SeriesDetailDialog(
 }
 
 @Composable
-private fun SeriesBookRow(book: Book, vm: BooksViewModel, onClick: () -> Unit) {
+private fun SeriesBookRow(
+    book: Book,
+    vm: BooksViewModel,
+    playerVm: ru.fire_core.xauplayer.ui.viewmodel.PlayerViewModel,
+    onClick: () -> Unit
+) {
     var coverUrl by remember(book.id) { mutableStateOf("") }
     LaunchedEffect(book.id) { coverUrl = vm.getBookCoverUrl(book.id) }
     val effect = remember(book.title) { FunPhrases.bookEffect(book.title) }
@@ -158,6 +169,8 @@ private fun SeriesBookRow(book: Book, vm: BooksViewModel, onClick: () -> Unit) {
                 )
             }
             effect?.let { Text(it.emoji, style = MaterialTheme.typography.titleMedium) }
+            // Скачать / загрузка / удалить (если книга скачана)
+            BookDownloadIconButton(bookId = book.id, playerVm = playerVm)
         }
     }
 }

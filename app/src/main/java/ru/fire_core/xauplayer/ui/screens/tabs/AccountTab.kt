@@ -190,7 +190,7 @@ fun ActivityGrid(
         try {
             Color(android.graphics.Color.parseColor(accentColorHex))
         } catch (e: Exception) {
-            Color(0xFF1DB954) // Spotify green по умолчанию
+            Color(0xFFFF4D6D) // акцент по умолчанию (как в вебе)
         }
     }
     

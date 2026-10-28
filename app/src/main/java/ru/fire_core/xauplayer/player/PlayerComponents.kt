@@ -29,6 +29,14 @@ import ru.fire_core.xauplayer.core.config.AppConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Переключение глав для системных контролов (шторка, экран блокировки, гарнитура). Реализует PlayerViewModel. */
+interface ChapterNavigation {
+    fun hasNext(): Boolean
+    fun hasPrevious(): Boolean
+    fun next()
+    fun previous()
+}
+
 @Singleton
 class PlayerHolder @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -53,8 +61,32 @@ class PlayerHolder @Inject constructor(
         .build()
     
     private var playerListener: Player.Listener? = null
+
+    /** Выставляется PlayerViewModel; PlayerService маппит на него кнопки «следующая/предыдущая». */
+    @Volatile var chapterNavigation: ChapterNavigation? = null
+
+    private var preparedUrl: String? = null
     
+    // Явно задаём аудио-сессию плеера, чтобы эквалайзер мог прикрепиться именно к ней.
+    private var _audioSessionId: Int = 0
+
+    /** ID аудио-сессии, на которую выводит звук плеер (для эквалайзера). */
+    fun audioSessionId(): Int = _audioSessionId
+
     init {
+        // Задаём стабильный audio session id для ExoPlayer (нужно эквалайзеру)
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val sid = am.generateAudioSessionId()
+            if (sid != android.media.AudioManager.ERROR && sid != 0) {
+                exo.setAudioSessionId(sid)
+                _audioSessionId = sid
+                logger.info("PlayerHolder", "Player audio session id set: $sid")
+            }
+        } catch (e: Exception) {
+            logger.warn("PlayerHolder", "Failed to set audio session id: ${e.message}", e)
+        }
+
         // Добавляем обработчик ошибок для автоматического retry
         playerListener = object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -92,7 +124,7 @@ class PlayerHolder @Inject constructor(
                 val cacheSize = settingsStore.mediaCacheSize.first()
                 val db = StandaloneDatabaseProvider(context)
                 _cache.value = SimpleCache(
-                    settingsStore.basepath.resolve("media_cache"),
+                    context.cacheDir.resolve(AppConfig.MEDIA_CACHE_DIR),
                     LeastRecentlyUsedCacheEvictor(cacheSize),
                     db
                 )
@@ -102,7 +134,7 @@ class PlayerHolder @Inject constructor(
                 val db = StandaloneDatabaseProvider(context)
                 val defaultCacheSize = AppConfig.DEFAULT_MEDIA_CACHE_SIZE_BYTES
                 _cache.value = SimpleCache(
-                    settingsStore.basepath.resolve(AppConfig.MEDIA_CACHE_DIR),
+                    context.cacheDir.resolve(AppConfig.MEDIA_CACHE_DIR),
                     LeastRecentlyUsedCacheEvictor(defaultCacheSize),
                     db
                 )
@@ -140,12 +172,27 @@ class PlayerHolder @Inject constructor(
         }
 
         override fun getMinimumLoadableRetryCount(dataType: Int): Int {
-            // Продолжаем попытки до бесконечности
+            // Ограниченное число попыток: исчерпав их, плеер сообщит об ошибке,
+            // и приложение переоткроет поток по свежему URL. При бесконечных
+            // повторах глава молча зависала бы в буферизации на конце.
             return AppConfig.MAX_RETRY_ATTEMPTS
         }
     }
 
-    fun prepare(url: String, title: String = "XAuPlayer", artist: String? = null, coverUrl: String? = null) {
+    /**
+     * Готовит главу к воспроизведению.
+     *
+     * @param cacheKey стабильный ключ медиа-кэша. У подписанных ссылок хранилища
+     * query меняется при каждом запросе, поэтому кэш, ключом которого служит URL,
+     * не переиспользуется никогда — и каждая перемотка тянет данные заново.
+     */
+    fun prepare(
+        url: String,
+        title: String = "XAuPlayer",
+        artist: String? = null,
+        coverUrl: String? = null,
+        cacheKey: String? = null
+    ) {
         require(url.isNotBlank()) { "URL cannot be blank" }
         
         val mediaMetadata = androidx.media3.common.MediaMetadata.Builder()
@@ -169,10 +216,13 @@ class PlayerHolder @Inject constructor(
             throw IllegalArgumentException("Invalid URL: $url", e)
         }
         
-        val mediaItem = MediaItem.Builder()
+        val mediaItemBuilder = MediaItem.Builder()
             .setUri(uri)
             .setMediaMetadata(mediaMetadata)
-            .build()
+        if (!cacheKey.isNullOrBlank()) {
+            mediaItemBuilder.setCustomCacheKey(cacheKey)
+        }
+        val mediaItem = mediaItemBuilder.build()
         
         // Для локальных файлов используем DefaultDataSourceFactory, для HTTP - cacheDataSourceFactory
         val isLocalFile = url.startsWith("file://") || url.startsWith("/")
@@ -192,9 +242,21 @@ class PlayerHolder @Inject constructor(
         val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
             .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
             .createMediaSource(mediaItem)
+        preparedUrl = url
         exo.setMediaSource(mediaSource)
         exo.prepare()
     }
+
+    /** Сбрасывает кэш потокового аудио (скачанные главы не затрагиваются). */
+    fun clearMediaCache() {
+        val c = cache ?: return
+        for (key in HashSet(c.keys)) {
+            try { c.removeResource(key) } catch (e: Exception) { logger.warn("PlayerHolder", "removeResource failed: $key", e) }
+        }
+    }
+
+    /** URL текущей подготовленной главы (нужен для диагностики и повторного открытия потока). */
+    fun currentUrl(): String? = preparedUrl
 
     fun player(): ExoPlayer = exo
     

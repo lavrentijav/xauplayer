@@ -20,6 +20,12 @@ interface AuthRepository {
     suspend fun saveTokens(access: String, refresh: String, deviceId: Long, email: String, userId: Long, name: String?, passwordHash: String? = null)
     suspend fun getSavedAccounts(): List<SavedAccount>
     suspend fun getSavedAccount(email: String): SavedAccount?
+    /**
+     * Есть ли уже активная сессия (сохранённые токены текущего аккаунта).
+     * Позволяет при запуске сразу открыть приложение, не выполняя повторный
+     * вход и обновление токена (истёкший токен обновится лениво по 401).
+     */
+    suspend fun hasActiveSession(): Boolean
     suspend fun selectAccount(email: String): Boolean
     suspend fun deleteAccount(email: String)
     suspend fun logout(saveAccount: Boolean = false)
@@ -138,6 +144,12 @@ class AuthRepositoryImpl @Inject constructor(
 
     override suspend fun getSavedAccount(email: String): SavedAccount? {
         return db.savedAccountDao().getByEmail(email)
+    }
+
+    override suspend fun hasActiveSession(): Boolean {
+        val email = tokenStore.currentEmail.first()
+        val access = tokenStore.accessToken.first()
+        return !email.isNullOrBlank() && !access.isNullOrBlank()
     }
 
     override suspend fun selectAccount(email: String): Boolean {
@@ -318,13 +330,13 @@ class AuthRepositoryImpl @Inject constructor(
             }
             
             // 3. Очищаем медиа кэш плеера
-            val mediaCacheDir = File(settingsStore.basepath, "media_cache")
+            val mediaCacheDir = File(context.cacheDir, "media_cache")
             if (mediaCacheDir.exists()) {
                 mediaCacheDir.deleteRecursively()
             }
             
             // 4. Очищаем общий кэш приложения
-            val httpCacheDir = File(settingsStore.basepath, "http_cache")
+            val httpCacheDir = File(context.cacheDir, "http_cache")
             if (httpCacheDir.exists()) {
                 httpCacheDir.deleteRecursively()
             }
