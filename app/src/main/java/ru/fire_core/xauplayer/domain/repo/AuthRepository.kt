@@ -20,6 +20,12 @@ interface AuthRepository {
     suspend fun saveTokens(access: String, refresh: String, deviceId: Long, email: String, userId: Long, name: String?, passwordHash: String? = null)
     suspend fun getSavedAccounts(): List<SavedAccount>
     suspend fun getSavedAccount(email: String): SavedAccount?
+    /**
+     * Есть ли уже активная сессия (сохранённые токены текущего аккаунта).
+     * Позволяет при запуске сразу открыть приложение, не выполняя повторный
+     * вход и обновление токена (истёкший токен обновится лениво по 401).
+     */
+    suspend fun hasActiveSession(): Boolean
     suspend fun selectAccount(email: String): Boolean
     suspend fun deleteAccount(email: String)
     suspend fun logout(saveAccount: Boolean = false)
@@ -138,6 +144,12 @@ class AuthRepositoryImpl @Inject constructor(
 
     override suspend fun getSavedAccount(email: String): SavedAccount? {
         return db.savedAccountDao().getByEmail(email)
+    }
+
+    override suspend fun hasActiveSession(): Boolean {
+        val email = tokenStore.currentEmail.first()
+        val access = tokenStore.accessToken.first()
+        return !email.isNullOrBlank() && !access.isNullOrBlank()
     }
 
     override suspend fun selectAccount(email: String): Boolean {

@@ -29,6 +29,7 @@ import ru.fire_core.xauplayer.ui.viewmodel.BooksViewModel
 fun BookDetailDialog(
     book: Book,
     vm: BooksViewModel,
+    playerVm: ru.fire_core.xauplayer.ui.viewmodel.PlayerViewModel,
     bookStatus: String?,
     onPlay: () -> Unit,
     onDismiss: () -> Unit
@@ -130,6 +131,26 @@ fun BookDetailDialog(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Слушать")
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // Добавить в список воспроизведения и управление загрузкой (скачать/удалить)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { playerVm.addBook(book) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Добавить")
+                        }
+                        BookDownloadButton(
+                            bookId = book.id,
+                            playerVm = playerVm,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
 
                     Spacer(Modifier.height(16.dp))

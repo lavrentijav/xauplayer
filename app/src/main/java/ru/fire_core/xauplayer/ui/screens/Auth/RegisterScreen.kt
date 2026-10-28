@@ -46,11 +46,21 @@ fun RegisterScreen(
     LaunchedEffect(Unit) {
         if (!autoLoginAttempted) {
             autoLoginAttempted = true
+
+            // Быстрый путь: если сессия уже активна (токены сохранены с прошлого
+            // запуска) — сразу открываем приложение, не выполняя повторный вход и
+            // обновление токена. Иначе на каждом запуске переоткрывалась сессия и
+            // перезапускался сервис плеера. Истёкший токен обновится лениво по 401.
+            if (viewModel.hasActiveSession()) {
+                onAutoLoginSuccess()
+                return@LaunchedEffect
+            }
+
             viewModel.loadSavedAccounts()
-            
+
             // Даем время загрузить аккаунты
             kotlinx.coroutines.delay(ru.fire_core.xauplayer.core.config.AppConfig.ANIMATION_DELAY_MS)
-            
+
             // Проверяем наличие последнего успешного входа
             if (savedAccounts.isNotEmpty()) {
                 val lastAccount = savedAccounts.maxByOrNull { it.lastLogin }
