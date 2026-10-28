@@ -201,8 +201,9 @@ class PlayerViewModel @Inject constructor(
         positionUpdateJob?.cancel()
         val player = holder.player()
         positionUpdateJob = viewModelScope.launch {
-            // Получаем интервал обновления из настроек
-            val updateInterval = settingsStore.positionUpdateInterval.first()
+            // Для плавного ползунка используем частый фиксированный интервал (не из настроек):
+            // это только чтение позиции и обновление StateFlow, без ввода-вывода.
+            val updateInterval = ru.fire_core.xauplayer.core.config.AppConfig.UI_POSITION_POLL_INTERVAL_MS
             var stalledAtEndMs = 0L
             while (true) {
                 try {
@@ -441,9 +442,27 @@ class PlayerViewModel @Inject constructor(
                 retryCurrentChapterAfterError()
             }
 
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                // Используем РЕАЛЬНОЕ состояние воспроизведения (не намерение playWhenReady),
+                // чтобы кнопка play/pause и ползунок совпадали со звуком.
+                _uiState.value = _uiState.value.copy(isPlaying = isPlaying)
+                if (isPlaying) {
+                    // Перезапускаем плавные обновления позиции и сразу подтягиваем позицию
+                    startPositionUpdates()
+                    val pos = player.currentPosition
+                    val dur = player.duration
+                    if (pos != C.TIME_UNSET) {
+                        _uiState.value = _uiState.value.copy(
+                            currentPosition = pos,
+                            duration = if (dur != C.TIME_UNSET) dur else _uiState.value.duration
+                        )
+                    }
+                }
+            }
+
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                _uiState.value = _uiState.value.copy(isPlaying = playWhenReady)
-                // Перезапускаем обновления позиции при изменении состояния воспроизведения
+                // Намерение играть: обновляем позицию, но состояние isPlaying берём из
+                // onIsPlayingChanged (реальное воспроизведение).
                 if (playWhenReady) {
                     startPositionUpdates()
                 }
@@ -850,8 +869,8 @@ class PlayerViewModel @Inject constructor(
 
             val player = holder.player()
 
-            val serviceIntent = Intent(context, PlayerService::class.java)
-            context.startForegroundService(serviceIntent)
+            // Запуск сервиса не должен прерывать подготовку главы (см. startPlayerServiceSafely).
+            startPlayerServiceSafely()
 
             if (savedProgress != null && savedProgress.speed > 0) {
                 player.setPlaybackSpeed(savedProgress.speed)
@@ -932,6 +951,23 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
+     * Запускает [PlayerService] (уведомление плеера, системные контролы).
+     *
+     * ВАЖНО: плеер живёт в [PlayerHolder] (app-синглтон), поэтому воспроизведение не зависит от
+     * успеха запуска сервиса. При автопереходе на следующую главу в фоне повторный
+     * startForegroundService на Android 12+ может бросить ForegroundServiceStartNotAllowedException.
+     * Раньше это исключение прерывало playChapter ДО holder.prepare(), и следующая глава не загружалась.
+     * Здесь запуск НЕ фатален: ошибку логируем и продолжаем.
+     */
+    private fun startPlayerServiceSafely() {
+        try {
+            context.startForegroundService(Intent(context, PlayerService::class.java))
+        } catch (e: Exception) {
+            logger.warn("PlayerViewModel", "startForegroundService не удался (вероятно, фон): ${e.message}", e)
+        }
+    }
+
+    /**
      * @param force игнорировать защиту от повторных запусков. Нужен автопереходу:
      * пропустить переход на следующую главу из-за взведённого флага нельзя —
      * книга просто перестанет играть.
@@ -997,11 +1033,11 @@ class PlayerViewModel @Inject constructor(
             
             // Получаем плеер до запуска сервиса, чтобы избежать блокировок
             val player = holder.player()
-            
-            // Запускаем сервис для уведомлений (после получения плеера)
-            val serviceIntent = Intent(context, PlayerService::class.java)
-            context.startForegroundService(serviceIntent)
-            
+
+            // Запускаем сервис для уведомлений (после получения плеера). НЕ фатально:
+            // при авто-переходе в фоне сервис мог быть недоступен — глава всё равно должна заиграть.
+            startPlayerServiceSafely()
+
             // Загружаем сохраненный прогресс
             val savedProgress = getProgress(book.id)
             val speedToUse = preferredSpeed
@@ -1533,10 +1569,9 @@ class PlayerViewModel @Inject constructor(
         // Demo: play test stream if backend not available
         val demo = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
         
-        // Запускаем сервис для уведомлений
-        val serviceIntent = Intent(context, PlayerService::class.java)
-        context.startForegroundService(serviceIntent)
-        
+        // Запускаем сервис для уведомлений (не фатально).
+        startPlayerServiceSafely()
+
         holder.prepare(demo)
         holder.player().playWhenReady = true
         _uiState.value = _uiState.value.copy(isPlaying = true)

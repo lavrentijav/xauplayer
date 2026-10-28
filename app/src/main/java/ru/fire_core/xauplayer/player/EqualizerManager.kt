@@ -26,15 +26,17 @@ class EqualizerManager @Inject constructor(
 
     fun attachToPlayer(player: Player) {
         try {
-            // В Media3 нет прямого audioSessionId, используем AudioManager для получения session ID
-            val audioManager = context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-            val sessionId = audioManager.generateAudioSessionId()
-            
-            if (sessionId == 0) {
-                logger.warn("EqualizerManager", "Audio session ID is 0, cannot attach equalizer")
+            // Берём РЕАЛЬНЫЙ audio session id плеера, а не генерируем новый.
+            // Раньше здесь создавался новый session id через generateAudioSessionId(),
+            // из-за чего эквалайзер прикреплялся к пустой сессии и не влиял на звук.
+            val sessionId = (player as? androidx.media3.exoplayer.ExoPlayer)?.audioSessionId
+                ?: androidx.media3.common.C.AUDIO_SESSION_ID_UNSET
+
+            if (sessionId == androidx.media3.common.C.AUDIO_SESSION_ID_UNSET || sessionId == 0) {
+                logger.warn("EqualizerManager", "Player audio session id is unset, cannot attach equalizer yet")
                 return
             }
-            
+
             if (audioSessionId == sessionId && equalizer != null) {
                 // Already attached to this session
                 return
