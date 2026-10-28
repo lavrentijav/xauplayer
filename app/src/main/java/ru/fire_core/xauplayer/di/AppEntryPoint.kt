@@ -15,5 +15,6 @@ import ru.fire_core.xauplayer.player.PlayerHolder
 interface AppEntryPoint {
     fun playerHolder(): PlayerHolder
     fun logger(): AppLogger
+    fun cacheManager(): ru.fire_core.xauplayer.data.cache.CacheManager
 }
 

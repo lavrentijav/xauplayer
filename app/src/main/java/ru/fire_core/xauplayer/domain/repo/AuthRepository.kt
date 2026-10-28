@@ -318,13 +318,13 @@ class AuthRepositoryImpl @Inject constructor(
             }
             
             // 3. Очищаем медиа кэш плеера
-            val mediaCacheDir = File(settingsStore.basepath, "media_cache")
+            val mediaCacheDir = File(context.cacheDir, "media_cache")
             if (mediaCacheDir.exists()) {
                 mediaCacheDir.deleteRecursively()
             }
             
             // 4. Очищаем общий кэш приложения
-            val httpCacheDir = File(settingsStore.basepath, "http_cache")
+            val httpCacheDir = File(context.cacheDir, "http_cache")
             if (httpCacheDir.exists()) {
                 httpCacheDir.deleteRecursively()
             }

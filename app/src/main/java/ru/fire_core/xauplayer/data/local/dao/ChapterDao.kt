@@ -16,6 +16,9 @@ interface ChapterDao {
     @Query("DELETE FROM Chapter WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Long>)
 
+    @Query("SELECT id FROM Chapter")
+    suspend fun getAllIds(): List<Long>
+
     /** Кэш глав: очищается вместе с библиотекой (скачанные главы не затрагиваются — они в downloaded_chapters). */
     @Query("DELETE FROM Chapter")
     suspend fun clear()

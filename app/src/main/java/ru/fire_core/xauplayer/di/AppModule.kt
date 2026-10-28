@@ -66,7 +66,7 @@ object AppModule {
     ): OkHttpClient {
         logger.debug("AppModule", "[DI] Создание OkHttpClient...")
         // Кэш для офлайн работы
-        val cacheDir = File(settingsStore.basepath, "http_cache")
+        val cacheDir = File(context.cacheDir, "http_cache")
         val cacheSize = AppConfig.DEFAULT_MEDIA_CACHE_SIZE_BYTES
         val cache = Cache(cacheDir, cacheSize)
         logger.debug("AppModule", "[DI] HTTP кэш создан")

@@ -92,7 +92,7 @@ class PlayerHolder @Inject constructor(
                 val cacheSize = settingsStore.mediaCacheSize.first()
                 val db = StandaloneDatabaseProvider(context)
                 _cache.value = SimpleCache(
-                    settingsStore.basepath.resolve("media_cache"),
+                    context.cacheDir.resolve(AppConfig.MEDIA_CACHE_DIR),
                     LeastRecentlyUsedCacheEvictor(cacheSize),
                     db
                 )
@@ -102,7 +102,7 @@ class PlayerHolder @Inject constructor(
                 val db = StandaloneDatabaseProvider(context)
                 val defaultCacheSize = AppConfig.DEFAULT_MEDIA_CACHE_SIZE_BYTES
                 _cache.value = SimpleCache(
-                    settingsStore.basepath.resolve(AppConfig.MEDIA_CACHE_DIR),
+                    context.cacheDir.resolve(AppConfig.MEDIA_CACHE_DIR),
                     LeastRecentlyUsedCacheEvictor(defaultCacheSize),
                     db
                 )
@@ -194,6 +194,14 @@ class PlayerHolder @Inject constructor(
             .createMediaSource(mediaItem)
         exo.setMediaSource(mediaSource)
         exo.prepare()
+    }
+
+    /** Сбрасывает кэш потокового аудио (скачанные главы не затрагиваются). */
+    fun clearMediaCache() {
+        val c = cache ?: return
+        for (key in HashSet(c.keys)) {
+            try { c.removeResource(key) } catch (e: Exception) { logger.warn("PlayerHolder", "removeResource failed: $key", e) }
+        }
     }
 
     fun player(): ExoPlayer = exo
