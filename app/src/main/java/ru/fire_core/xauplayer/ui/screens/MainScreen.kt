@@ -31,14 +31,29 @@ import ru.fire_core.xauplayer.ui.screens.tabs.FullScreenPlayerModal
 import ru.fire_core.xauplayer.ui.viewmodel.PlayerViewModel
 import ru.fire_core.xauplayer.ui.viewmodel.BooksViewModel
 import ru.fire_core.xauplayer.ui.viewmodel.SettingsViewModel
+import ru.fire_core.xauplayer.ui.viewmodel.SecurityNoticeViewModel
 
 @Composable
 fun MainScreen(
     onLogout: () -> Unit = {},
     playerVm: PlayerViewModel = hiltViewModel(),
     booksVm: BooksViewModel = hiltViewModel(),
-    settingsVm: SettingsViewModel = hiltViewModel()
+    settingsVm: SettingsViewModel = hiltViewModel(),
+    securityVm: SecurityNoticeViewModel = hiltViewModel()
 ) {
+    val securityNotice by securityVm.store.notice.collectAsState()
+    securityNotice?.let { text ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { securityVm.store.dismiss() },
+            title = { androidx.compose.material3.Text("Безопасность аккаунта") },
+            text = { androidx.compose.material3.Text(text) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { securityVm.store.dismiss() }) {
+                    androidx.compose.material3.Text("Понятно")
+                }
+            }
+        )
+    }
     var tab by remember { mutableStateOf(1) } // Автоматически открываем вкладку плеера
     var selectedBook by remember { mutableStateOf<ru.fire_core.xauplayer.data.local.entities.Book?>(null) }
     var showChaptersList by remember { mutableStateOf(false) }

@@ -27,6 +27,7 @@ sealed class AuthState { object Idle : AuthState(); object Loading : AuthState()
 class AuthViewModel @Inject constructor(
     private val registerUseCase: RegisterUseCase,
     private val loginUseCase: LoginUseCase,
+    private val securityNotices: ru.fire_core.xauplayer.core.security.SecurityNoticeStore,
     private val saveTokens: SaveTokensUseCase,
     private val getSavedAccounts: GetSavedAccountsUseCase,
     private val selectAccount: SelectAccountUseCase,
@@ -77,6 +78,7 @@ class AuthViewModel @Inject constructor(
         try {
             logger.info("AuthViewModel", "Attempting to login user: $email, rememberMe: $rememberMe")
             val resp = loginUseCase(email, password, device)
+            securityNotices.post(resp.security_notice)
             // Сначала сохраняем токены, чтобы они были доступны для последующих запросов
             saveTokens(resp.access_token, resp.refresh_token, resp.device_id, email, resp.device_id, null, if (rememberMe) password else null)
             
