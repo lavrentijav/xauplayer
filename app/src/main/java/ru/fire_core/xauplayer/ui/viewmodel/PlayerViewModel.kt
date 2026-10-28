@@ -319,7 +319,9 @@ class PlayerViewModel @Inject constructor(
                     title = chapter.title,
                     artist = "${book.title} - ${book.author}",
                     coverUrl = resolveCoverUrl(book),
-                    cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
+                    cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id),
+                    bookId = book.id,
+                    chapterId = chapter.id
                 )
                 if (resumePosition > 0) {
                     player.seekTo(resumePosition)
@@ -928,7 +930,9 @@ class PlayerViewModel @Inject constructor(
                 title = chapter.title,
                 artist = "${book.title} - ${book.author}",
                 coverUrl = coverUrl,
-                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
+                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id),
+                bookId = book.id,
+                chapterId = chapter.id
             )
             
             // Перематываем на сохраненную позицию, если есть
@@ -1101,7 +1105,9 @@ class PlayerViewModel @Inject constructor(
                 title = chapter.title,
                 artist = "${book.title} - ${book.author}",
                 coverUrl = coverUrl,
-                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id)
+                cacheKey = streamUrlResolver.cacheKey(book.id, chapter.id),
+                bookId = book.id,
+                chapterId = chapter.id
             )
 
             _uiState.value = _uiState.value.copy(

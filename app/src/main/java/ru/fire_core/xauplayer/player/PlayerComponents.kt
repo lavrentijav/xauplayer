@@ -29,6 +29,9 @@ import ru.fire_core.xauplayer.core.config.AppConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Префикс mediaId: «xau:<bookId>:<chapterId>». */
+const val MEDIA_ID_PREFIX = "xau:"
+
 /** Переключение глав для системных контролов (шторка, экран блокировки, гарнитура). Реализует PlayerViewModel. */
 interface ChapterNavigation {
     fun hasNext(): Boolean
@@ -191,7 +194,9 @@ class PlayerHolder @Inject constructor(
         title: String = "XAuPlayer",
         artist: String? = null,
         coverUrl: String? = null,
-        cacheKey: String? = null
+        cacheKey: String? = null,
+        bookId: Long? = null,
+        chapterId: Long? = null
     ) {
         require(url.isNotBlank()) { "URL cannot be blank" }
         
@@ -221,6 +226,10 @@ class PlayerHolder @Inject constructor(
             .setMediaMetadata(mediaMetadata)
         if (!cacheKey.isNullOrBlank()) {
             mediaItemBuilder.setCustomCacheKey(cacheKey)
+        }
+        // Какая глава играет — нужно сервису для автоперехода, когда экрана (ViewModel) уже нет
+        if (bookId != null && chapterId != null) {
+            mediaItemBuilder.setMediaId(MEDIA_ID_PREFIX + bookId + ":" + chapterId)
         }
         val mediaItem = mediaItemBuilder.build()
         

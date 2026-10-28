@@ -14,8 +14,8 @@ android {
         applicationId = "ru.fire_core.xauplayer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "1.1.22"
+        versionCode = 23
+        versionName = "1.1.23"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -105,6 +105,8 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     implementation("androidx.media3:media3-datasource:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
+    // MediaStyle для классического уведомления (режим «не системный»)
+    implementation("androidx.media:media:1.7.0")
 
     // --- Networking ---
     implementation("com.squareup.retrofit2:retrofit:2.11.0")

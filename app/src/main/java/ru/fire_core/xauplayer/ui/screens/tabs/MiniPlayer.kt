@@ -1,6 +1,12 @@
 package ru.fire_core.xauplayer.ui.screens.tabs
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
@@ -72,16 +78,27 @@ fun MiniPlayer(
     // Индекс текущей главы
     val chapterIndex = state.chapters.indexOfFirst { it.id == chapter.id } + 1
 
-    Card(
+    // Подложка: градиентная вуаль, плавно уводящая контент под плеером в фон (вместо жёсткого края),
+    // она же гасит нажатия — элементы под плеером некликабельны, но не «просвечивают» кривым куском.
+    // Сама карточка полупрозрачная (как --player-bg в вебе), с тонкой рамкой и мягкой тенью.
+    val backdrop = MaterialTheme.colorScheme.background
+    Box(
         modifier = modifier
+            .background(Brush.verticalGradient(listOf(Color.Transparent, backdrop.copy(alpha = 0.85f))))
+            .pointerInput(Unit) { detectTapGestures { } }
+    ) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
             .wrapContentHeight()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clickable(enabled = true) { onClick() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Row(
             modifier = Modifier
@@ -224,5 +241,5 @@ fun MiniPlayer(
             }
         }
     }
+    }
 }
-

@@ -125,7 +125,7 @@ fun PlaybackSettingsDialog(
 
                 Text(
                     "Включено — системное MediaStyle уведомление с медиа-контролами в шторке, на экране блокировки, в Android Auto и на умных часах. " +
-                        "Выключено — обычное уведомление с кнопкой Play/Pause, без медиа-контролов и без показа на экране блокировки.",
+                        "Выключено — классическое уведомление плеера (как раньше): предыдущая, назад, пауза, вперёд, следующая, обложка и скорость; без системной карточки «сейчас играет».",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp)
@@ -142,7 +142,7 @@ fun PlaybackSettingsDialog(
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
-                            if (useSystemMediaPlayer) "Включено (рекомендуется)" else "Выключено (простой режим)",
+                            if (useSystemMediaPlayer) "Включено (рекомендуется)" else "Выключено (классическое уведомление)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
