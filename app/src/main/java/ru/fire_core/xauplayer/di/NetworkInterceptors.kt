@@ -504,6 +504,9 @@ object NetworkInterceptors {
             try {
                 chain.proceed(networkRequest)
             } catch (e: Exception) {
+                // Откат на кэш только для безопасных запросов. Для POST/PUT/DELETE (вход, прогресс)
+                // кэша не существует, а нужная ошибка — исходная сетевая.
+                if (request.method != "GET" && request.method != "HEAD") throw e
                 val cacheControl = okhttp3.CacheControl.Builder()
                     .onlyIfCached()
                     .maxStale(ru.fire_core.xauplayer.core.config.AppConfig.NETWORK_CACHE_MAX_STALE_DAYS, TimeUnit.DAYS)
@@ -511,11 +514,18 @@ object NetworkInterceptors {
                 val cachedRequest = request.newBuilder()
                     .cacheControl(cacheControl)
                     .build()
-                try {
+                val cached = try {
                     chain.proceed(cachedRequest)
                 } catch (e2: Exception) {
                     throw e
                 }
+                // При only-if-cached без попадания в кэш OkHttp не бросает исключение,
+                // а возвращает синтетический 504 — он маскирует настоящую причину.
+                if (cached.code == 504 && cached.cacheResponse == null) {
+                    cached.close()
+                    throw e
+                }
+                cached
             }
         }
     }
