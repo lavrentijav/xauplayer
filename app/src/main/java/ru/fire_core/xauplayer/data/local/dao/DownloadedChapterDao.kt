@@ -20,6 +20,9 @@ interface DownloadedChapterDao {
     @Query("SELECT COUNT(*) FROM downloaded_chapters WHERE bookId = :bookId")
     suspend fun countByBookId(bookId: Long): Int
 
+    @Query("SELECT DISTINCT bookId FROM downloaded_chapters")
+    suspend fun getBookIdsWithDownloads(): List<Long>
+
     @Query("DELETE FROM downloaded_chapters WHERE chapterId = :chapterId")
     suspend fun delete(chapterId: Long)
 

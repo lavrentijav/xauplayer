@@ -50,6 +50,7 @@ data class PlayerUiState(
     val books: List<Book> = emptyList(), // Только книги с прогрессом
     val selectedBook: Book? = null,
     val chapters: List<Chapter> = emptyList(),
+    val pendingChapterUpdates: List<Chapter> = emptyList(), // Изменившиеся на сервере главы скачанной книги (ждём решения)
     val selectedChapter: Chapter? = null,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false, // Буферизация аудио
@@ -84,6 +85,7 @@ class PlayerViewModel @Inject constructor(
     private val downloadManager: ru.fire_core.xauplayer.download.DownloadManager,
     private val seriesUseCases: SeriesUseCases,
     private val statusUseCases: StatusUseCases,
+    private val booksRepository: ru.fire_core.xauplayer.domain.repo.BooksRepository,
     private val coverManager: CoverManager,
     private val streamUrlResolver: StreamUrlResolver,
     private val logger: AppLogger,
@@ -520,23 +522,23 @@ class PlayerViewModel @Inject constructor(
                     // Но если есть загруженные главы, они будут доступны через DownloadedChapter
                 }
             } else {
-                // Если главы есть локально, проверяем нужно ли синхронизировать (только если есть интернет)
-                val needsSync = shouldSyncChapters(book.id)
-                if (needsSync) {
-                    logger.info("PlayerViewModel", "Syncing chapters for book ${book.id} from server (shouldSync=true)")
-                    try {
-                        syncChapters(book.id, force = false)
-                        chapters = getChapters(book.id) // Обновляем список после синхронизации
-                    } catch (e: Exception) {
-                        logger.warn("PlayerViewModel", "Failed to sync chapters for book ${book.id} (offline mode?), using existing chapters", e)
-                        // Используем существующие главы при ошибке (офлайн режим)
+                // Главы есть в кэше: показываем их сразу, а при каждом входе в книгу делаем запрос;
+                // успех — кэш перезаписывается, ошибка (офлайн) — остаётся прежний список
+                try {
+                    if (syncChapters(book.id, force = true)) {
+                        chapters = getChapters(book.id)
                     }
-                } else {
-                    logger.info("PlayerViewModel", "Skipping chapters sync for book ${book.id} (shouldSync=false)")
+                } catch (e: Exception) {
+                    logger.warn("PlayerViewModel", "Failed to sync chapters for book ${book.id} (offline mode?), using cached chapters", e)
                 }
             }
             
-            _uiState.value = _uiState.value.copy(chapters = chapters, loading = false)
+            _uiState.value = _uiState.value.copy(
+                chapters = chapters,
+                loading = false,
+                // Если у книги есть скачанная копия, а на сервере главы изменились/добавились — спросим пользователя
+                pendingChapterUpdates = booksRepository.takePendingDownloadUpdates(book.id)
+            )
             
             // Сохраняем последнюю выбранную книгу
             settingsStore.setLastBookId(book.id)
@@ -1318,6 +1320,26 @@ class PlayerViewModel @Inject constructor(
 
     // === Методы для загрузки глав ===
     
+    /** Пользователь согласился обновить локальную копию: перекачиваем изменившиеся и новые главы. */
+    fun confirmUpdateDownloads() = viewModelScope.launch {
+        val book = _uiState.value.selectedBook ?: return@launch
+        val updates = _uiState.value.pendingChapterUpdates
+        _uiState.value = _uiState.value.copy(pendingChapterUpdates = emptyList())
+        updates.forEach { chapter ->
+            try {
+                // Старый файл удаляем, иначе загрузка может посчитать главу уже скачанной
+                if (isChapterDownloaded(chapter.id)) deleteDownloadedChapter(chapter.id).join()
+                downloadManager.downloadChapter(chapter, book.id)
+            } catch (e: Exception) {
+                logger.error("PlayerViewModel", "Failed to update downloaded chapter ${chapter.id}", e)
+            }
+        }
+    }
+
+    fun dismissUpdateDownloads() {
+        _uiState.value = _uiState.value.copy(pendingChapterUpdates = emptyList())
+    }
+
     fun downloadChapter(chapter: Chapter, bookId: Long) {
         try {
             logger.info("PlayerViewModel", "Starting download of chapter ${chapter.id}")

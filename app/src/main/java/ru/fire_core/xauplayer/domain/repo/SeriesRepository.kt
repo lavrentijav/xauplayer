@@ -41,6 +41,13 @@ class SeriesRepositoryImpl @Inject constructor(
                 )
             }
             db.seriesDao().upsertAll(mapped)
+
+            // Полный список (без поиска) получен успешно — убираем из кэша серии, которых на сервере больше нет
+            if (search.isNullOrBlank()) {
+                val remoteIds = mapped.map { it.id }.toSet()
+                db.seriesDao().getAllIds().filter { it !in remoteIds }
+                    .chunked(500).forEach { db.seriesDao().deleteByIds(it) }
+            }
             
             // Загружаем обложки серий в фоне
             // Если у серии нет обложки, пытаемся взять обложку из первой доступной книги

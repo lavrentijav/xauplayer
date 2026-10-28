@@ -1,18 +1,24 @@
 package ru.fire_core.xauplayer.data.local.dao
 
 import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Upsert
 import ru.fire_core.xauplayer.data.local.entities.Book
 
 @Dao
 interface BookDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // @Upsert (UPDATE при конфликте), а не REPLACE: REPLACE удаляет строку и каскадом сносит связи с тегами/списками
+    @Upsert
     suspend fun upsertAll(items: List<Book>)
     
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsert(book: Book)
+
+    @Query("SELECT id FROM Book")
+    suspend fun getAllIds(): List<Long>
+
+    @Query("DELETE FROM Book WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
 
     @Query("SELECT * FROM Book ORDER BY title")
     suspend fun getAll(): List<Book>

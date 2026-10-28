@@ -109,14 +109,12 @@ class BooksViewModel @Inject constructor(
                 logger.warn("BooksViewModel", "Failed to sync series", e)
             }
             
-            // Проверяем нужно ли синхронизировать книги
-            val needsSync = shouldSyncBooks()
-            if (needsSync) {
-                logger.info("BooksViewModel", "Syncing books from server (shouldSync=true)")
-                // Загружаем все книги (первые 10 сразу, остальные в фоне)
-                syncBooks(force = false, loadAll = true)
-            } else {
-                logger.info("BooksViewModel", "Skipping books sync (shouldSync=false)")
+            // При каждом входе в библиотеку делаем запрос; при успехе кэш перезаписывается,
+            // при ошибке остаётся показанный выше кэш
+            val synced = syncBooks(force = true, loadAll = true)
+            if (!synced) {
+                logger.warn("BooksViewModel", "Books sync failed — showing cached library")
+                _uiState.value = _uiState.value.copy(hasNetworkError = true)
             }
             
             val books = getBooks()
@@ -242,7 +240,7 @@ class BooksViewModel @Inject constructor(
                 bookTags = bookTags,
                 seriesTags = seriesTags,
                 allTags = allTags,
-                hasNetworkError = false,
+                hasNetworkError = !synced,
                 errorMessage = null
             )
         } catch (e: Exception) {

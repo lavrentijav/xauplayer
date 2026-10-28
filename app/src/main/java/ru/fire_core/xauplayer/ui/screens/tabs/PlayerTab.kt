@@ -120,6 +120,20 @@ fun PlayerTab(
 ) {
     val state by vm.uiState.collectAsState()
 
+    // Скачанная книга изменилась на сервере — спрашиваем, обновить ли локальную копию
+    if (state.pendingChapterUpdates.isNotEmpty()) {
+        val count = state.pendingChapterUpdates.size
+        AlertDialog(
+            onDismissRequest = { vm.dismissUpdateDownloads() },
+            title = { Text("Обновить скачанную книгу?") },
+            text = {
+                Text("На сервере изменились или добавились главы: $count. Обновить локальную копию? Изменённые главы будут скачаны заново.")
+            },
+            confirmButton = { TextButton(onClick = { vm.confirmUpdateDownloads() }) { Text("Обновить") } },
+            dismissButton = { TextButton(onClick = { vm.dismissUpdateDownloads() }) { Text("Не сейчас") } }
+        )
+    }
+
     // Загружаем книги с прогрессом при открытии плеера
     LaunchedEffect(Unit) {
         vm.loadBooks()
