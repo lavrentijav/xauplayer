@@ -55,6 +55,7 @@ data class AdminResponse(val code: Int, val body: String)
  */
 @Singleton
 class AdminClient @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
     baseClient: OkHttpClient,
     private val networkCache: NetworkCache
 ) {
@@ -163,6 +164,8 @@ class AdminClient @Inject constructor(
             "DELETE" -> if (payload != null) rb.delete(payload) else rb.delete()
             else -> rb.method(method, payload ?: "{}".toRequestBody(JSON))
         }
+        rb.header(ru.fire_core.xauplayer.core.security.DeviceFingerprint.HEADER,
+            ru.fire_core.xauplayer.core.security.DeviceFingerprint.get(context))
         token?.let { rb.header("Authorization", "Bearer $it") }
         proofKey?.let { key ->
             val window = System.currentTimeMillis() / 1000 / 30

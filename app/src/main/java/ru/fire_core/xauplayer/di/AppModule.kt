@@ -76,6 +76,15 @@ object AppModule {
         // Он будет доступен через Lazy или Provider, если понадобится
         return OkHttpClient.Builder()
             .cache(cache)
+            // Отпечаток устройства — на каждый запрос (серверный бан нарушителей по устройству)
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .header(ru.fire_core.xauplayer.core.security.DeviceFingerprint.HEADER,
+                            ru.fire_core.xauplayer.core.security.DeviceFingerprint.get(context))
+                        .build()
+                )
+            }
             // Base URL interceptor должен быть первым, чтобы изменять URL перед другими interceptors
             .addInterceptor(NetworkInterceptors.createBaseUrlInterceptor(networkCache))
             // Оффлайн-интерцептор: эмулирует ответы сервера в служебном/оффлайн-режиме
