@@ -62,6 +62,7 @@ class PlayerService : MediaSessionService() {
     @Inject lateinit var logger: AppLogger
     @Inject lateinit var okHttpClient: OkHttpClient
     @Inject lateinit var settingsStore: ru.fire_core.xauplayer.data.datastore.SettingsStore
+    @Inject lateinit var backgroundAdvancer: BackgroundAdvancer
 
     private val mediaChannelId = "xauplayer_media"
 
@@ -122,6 +123,9 @@ class PlayerService : MediaSessionService() {
             logger.error("PlayerService", "Error building media session: ${e.message}", e)
         }
 
+        // Автопереход на следующую главу, когда экрана (ViewModel) уже нет
+        backgroundAdvancer.attach()
+
         // Заглушка, чтобы уложиться в лимит startForeground() для startForegroundService().
         // Как только у плеера появляется медиа, провайдер заменяет её реальным
         // уведомлением с тем же NOTIFICATION_ID.
@@ -154,6 +158,7 @@ class PlayerService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        backgroundAdvancer.detach()
         serviceScope.cancel()
         mediaSession?.release()
         mediaSession = null
