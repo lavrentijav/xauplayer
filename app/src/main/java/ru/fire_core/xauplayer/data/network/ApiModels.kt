@@ -134,7 +134,8 @@ data class StatusesResponse(
 )
 
 data class StreamTokenResponse(
-    val url: String,
+    // Может отсутствовать: при сегментированном воспроизведении сервер отдаёт "type": "parts"
+    val url: String? = null,
     val type: String? = null,
     val stream_token: String? = null,
     val expires_in: Int? = null
