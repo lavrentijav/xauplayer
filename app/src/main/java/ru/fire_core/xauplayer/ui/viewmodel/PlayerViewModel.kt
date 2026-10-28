@@ -213,6 +213,10 @@ class PlayerViewModel @Inject constructor(
                     val bufferingWhilePlaying = !player.isPlaying &&
                         player.playWhenReady &&
                         player.playbackState == Player.STATE_BUFFERING
+                    // Страховка от пропущенного события: звук идёт, а UI считает, что нет
+                    if (player.isPlaying && !_uiState.value.isPlaying) {
+                        _uiState.value = _uiState.value.copy(isPlaying = true, isBuffering = false)
+                    }
                     // Обновляем только если играет - экономия батареи
                     if (!player.isPlaying && !bufferingWhilePlaying) {
                         stalledAtEndMs = 0L
@@ -368,7 +372,7 @@ class PlayerViewModel @Inject constructor(
         // Запускаем обновления позиции (будет обновлять только когда играет)
         startPositionUpdates()
         
-        player.addListener(object : Player.Listener {
+        val listener = object : Player.Listener {
             // Используем не устаревший onPlayerStateChanged, а актуальную пару колбэков:
             // onPlaybackStateChanged + onPlayWhenReadyChanged.
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -472,7 +476,37 @@ class PlayerViewModel @Inject constructor(
                 // Обновляем скорость в UI при изменении
                 _uiState.value = _uiState.value.copy(playbackSpeed = playbackParameters.speed)
             }
-        })
+        }
+        playerListener = listener
+        player.addListener(listener)
+
+        // Плеер общий (singleton) и живёт дольше ViewModel: если звук уже идёт (приложение открыли заново
+        // при работающем сервисе, пересоздана активность), события onIsPlayingChanged не придут —
+        // они сообщают только об ИЗМЕНЕНИЯХ. Поэтому состояние берём из плеера сразу.
+        syncStateFromPlayer()
+    }
+
+    private var playerListener: Player.Listener? = null
+
+    /**
+     * Подтягивает состояние UI из реального плеера. Нужен при (пере)создании ViewModel и как страховка
+     * от пропущенных событий: звук идёт, а кнопка показывает «не играет».
+     */
+    private fun syncStateFromPlayer() {
+        val player = holder.player()
+        val state = _uiState.value
+        val playing = player.isPlaying
+        val buffering = player.playbackState == Player.STATE_BUFFERING
+        val pos = player.currentPosition
+        val dur = player.duration
+        _uiState.value = state.copy(
+            isPlaying = playing || (state.isPlaying && player.playWhenReady && buffering),
+            isBuffering = buffering && player.playWhenReady,
+            playbackSpeed = player.playbackParameters.speed,
+            currentPosition = if (pos != C.TIME_UNSET && (playing || state.currentPosition == 0L)) pos else state.currentPosition,
+            duration = if (dur != C.TIME_UNSET && dur > 0) dur else state.duration
+        )
+        if (playing) startPositionUpdates()
     }
 
     private fun startProgressTracking() {
@@ -1194,6 +1228,8 @@ class PlayerViewModel @Inject constructor(
     
     override fun onCleared() {
         super.onCleared()
+        playerListener?.let { holder.player().removeListener(it) }
+        playerListener = null
         if (holder.chapterNavigation === chapterNavigation) holder.chapterNavigation = null
         progressSyncJob?.cancel()
         progressBufferJob?.cancel()
