@@ -337,6 +337,7 @@ class PlayerService : MediaSessionService() {
 
                             override fun onFailure(t: Throwable) {
                                 artworkUriLoading = null
+                                logger.warn("PlayerService", "Не удалось загрузить обложку для уведомления: $artworkUri", t)
                             }
                         },
                         androidx.core.content.ContextCompat.getMainExecutor(this)
@@ -392,7 +393,8 @@ class PlayerService : MediaSessionService() {
      * [ChapterNavigation] (его выставляет PlayerViewModel). Остальное уходит в ExoPlayer без изменений.
      */
     private inner class ChapterNavigationPlayer(player: Player) : ForwardingPlayer(player) {
-        private val nav: ChapterNavigation? get() = holder.chapterNavigation
+        // Экран жив — навигирует он; иначе кнопки обслуживает BackgroundAdvancer (по mediaId из БД)
+        private val nav: ChapterNavigation? get() = holder.chapterNavigation ?: backgroundAdvancer.fallbackNavigation
 
         override fun getAvailableCommands(): Player.Commands {
             val builder = super.getAvailableCommands().buildUpon()

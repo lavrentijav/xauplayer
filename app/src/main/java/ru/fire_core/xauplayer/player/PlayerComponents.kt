@@ -206,7 +206,8 @@ class PlayerHolder @Inject constructor(
                 artist?.let { setArtist(it) }
                 coverUrl?.let { 
                     try {
-                        setArtworkUri(android.net.Uri.parse(it))
+                        // Кэшированная обложка — путь без схемы: превращаем в file://, иначе загрузчик её не прочитает
+                        setArtworkUri(if (it.startsWith("/")) android.net.Uri.fromFile(java.io.File(it)) else android.net.Uri.parse(it))
                     } catch (e: Exception) {
                         logger.warn("PlayerHolder", "Failed to parse cover URL: $it", e)
                     }
