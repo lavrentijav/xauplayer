@@ -8,22 +8,23 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.graphics.drawable.IconCompat
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
-import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.FutureCallback
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -32,8 +33,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import ru.fire_core.xauplayer.core.config.AppConfig
 import ru.fire_core.xauplayer.core.logger.AppLogger
@@ -42,18 +45,16 @@ import java.util.concurrent.Executors
 import javax.inject.Inject
 
 /**
- * Foreground-сервис воспроизведения аудио.
+ * Foreground-сервис воспроизведения аудио. Два режима (настройка [SettingsStore.useSystemMediaPlayer]):
  *
- * Уведомление плеера управляется целиком самим [MediaSessionService] через
- * [MediaNotification.Provider] — это устраняет старую проблему, когда заглушка
- * «Инициализация плеера…» зависала навсегда (раньше её должен был заменять
- * отдельный PlayerNotificationManager, что не всегда срабатывало).
+ *  - **Системный** (по умолчанию): создаётся MediaSession Media3 и его уведомление
+ *    (шторка, карточка «сейчас играет», экран блокировки, Bluetooth, Android Auto, часы).
+ *  - **Классический** («как у ExoPlayer»): медиасессии НЕТ — поэтому ОС не показывает системную карточку.
+ *    Сервис сам рисует обычное MediaStyle-уведомление (предыдущая / назад / пауза / вперёд / следующая,
+ *    обложка, скорость в заголовке), кнопки идут обратно в сервис интентами. Кнопки гарнитуры
+ *    обрабатываются через MediaButtonReceiver.
  *
- * Поведение уведомления зависит от настройки [SettingsStore.useSystemMediaPlayer]:
- *  - включено  → системное MediaStyle-уведомление (шторка, экран блокировки,
- *                Android Auto, умные часы) через [DefaultMediaNotificationProvider];
- *  - выключено → классическое уведомление «как у ExoPlayer» (кнопки глав и перемотки, обложка,
- *                скорость в заголовке), не привязанное к системной карточке медиасессии.
+ * Плеер общий (singleton в [PlayerHolder]), переключение режима «на лету» не прерывает звук.
  */
 @UnstableApi
 @AndroidEntryPoint
@@ -64,40 +65,87 @@ class PlayerService : MediaSessionService() {
     @Inject lateinit var settingsStore: ru.fire_core.xauplayer.data.datastore.SettingsStore
     @Inject lateinit var backgroundAdvancer: BackgroundAdvancer
 
-    private val mediaChannelId = "xauplayer_media"
+    private val channelId = "xauplayer_media"
+    private val handler = Handler(Looper.getMainLooper())
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private var mediaSession: MediaSession? = null
+    private lateinit var navPlayer: ChapterNavigationPlayer
+    private lateinit var artworkLoader: DataSourceBitmapLoader
+    private val systemProvider by lazy {
+        DefaultMediaNotificationProvider.Builder(this)
+            .setChannelId(channelId)
+            .setNotificationId(NOTIFICATION_ID)
+            .build()
+            .apply { setSmallIcon(android.R.drawable.ic_media_play) }
+    }
 
     // Обложка для классического уведомления (грузится асинхронно, кэшируется по uri)
-    private var artworkLoader: DataSourceBitmapLoader? = null
     private var artworkUriLoaded: android.net.Uri? = null
     private var artworkUriLoading: android.net.Uri? = null
     private var artworkBitmap: android.graphics.Bitmap? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    /** Текущий режим уведомления. Читается провайдером при каждой отрисовке. */
     @Volatile
-    private var useSystemMediaPlayer = true
+    private var systemMode = true
+    private var classicListener: Player.Listener? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
 
-        // Провайдер уведомления, который сам MediaSessionService использует для
-        // отображения и обновления единственного foreground-уведомления.
-        setMediaNotificationProvider(AdaptiveNotificationProvider())
+        navPlayer = ChapterNavigationPlayer(holder.player())
+        // Обложки грузим через общий OkHttp (авторизация и кэш)
+        artworkLoader = DataSourceBitmapLoader(
+            MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor()),
+            OkHttpDataSource.Factory(okHttpClient).setUserAgent(AppConfig.HTTP_USER_AGENT)
+        )
+        setMediaNotificationProvider(systemProvider)
 
-        // Плеер создаётся заранее в PlayerHolder, поэтому сессию можно построить
-        // синхронно. Загружаем обложки через тот же авторизованный OkHttpClient.
+        // Режим читаем синхронно (DataStore отдаёт за миллисекунды) — иначе первый кадр будет не того режима
+        systemMode = try { runBlocking { settingsStore.getUseSystemMediaPlayer() } } catch (e: Exception) { true }
+
+        // Автопереход / кнопки глав / прогресс, когда экрана (ViewModel) уже нет
+        backgroundAdvancer.attach()
+
+        // Заглушка, чтобы уложиться в лимит startForeground() после startForegroundService()
+        startPlaceholderForeground()
+        applyMode(systemMode)
+
+        // Переключение режима «на лету»
+        serviceScope.launch {
+            settingsStore.useSystemMediaPlayer.drop(1).collect { enabled ->
+                if (enabled != systemMode) {
+                    systemMode = enabled
+                    applyMode(enabled)
+                }
+            }
+        }
+
+        // Если ничего не играет и в плеере пусто — не держим сервис с «пустым» уведомлением
+        handler.postDelayed({
+            val p = holder.player()
+            if (p.mediaItemCount == 0 && !p.isPlaying) stopSelf()
+        }, IDLE_STOP_DELAY_MS)
+    }
+
+    // --- режимы ---------------------------------------------------------------------------
+
+    private fun applyMode(system: Boolean) {
+        logger.info("PlayerService", "Режим уведомления: ${if (system) "системный" else "классический"}")
+        if (system) {
+            stopClassic()
+            ensureSession()
+        } else {
+            dropSession()
+            startClassic()
+        }
+    }
+
+    private fun ensureSession() {
+        if (mediaSession != null) return
         try {
-            val player = holder.player()
-            val bitmapLoader = DataSourceBitmapLoader(
-                MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor()),
-                OkHttpDataSource.Factory(okHttpClient).setUserAgent(AppConfig.HTTP_USER_AGENT)
-            )
-            // Кнопки перемотки для системного MediaStyle-уведомления.
-            // В custom layout Media3 отображает только кнопки с кастомной SessionCommand,
-            // поэтому перемотку реализуем через кастомные команды, обрабатываемые в Callback.
+            // Кнопки перемотки для системного уведомления: в custom layout Media3 показывает только кнопки
+            // с кастомной SessionCommand, поэтому перемотка идёт через кастомные команды в Callback.
             val rewindButton = CommandButton.Builder(CommandButton.ICON_REWIND)
                 .setSessionCommand(SessionCommand(ACTION_SEEK_BACK, Bundle.EMPTY))
                 .setDisplayName("Назад")
@@ -106,77 +154,193 @@ class PlayerService : MediaSessionService() {
                 .setSessionCommand(SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY))
                 .setDisplayName("Вперёд")
                 .build()
-            // Плеер общий и играет одну главу; ChapterNavigationPlayer добавляет системным
-            // контролам (шторка, гарнитура, Bluetooth) кнопки «следующая/предыдущая глава».
-            mediaSession = MediaSession.Builder(this, ChapterNavigationPlayer(player))
-                .setBitmapLoader(bitmapLoader)
+            val session = MediaSession.Builder(this, navPlayer)
+                .setBitmapLoader(artworkLoader)
                 .setSessionActivity(openAppIntent())
                 .setCallback(MediaSessionCallback())
                 .setCustomLayout(ImmutableList.of(rewindButton, fastForwardButton))
                 .build()
-            // Явно регистрируем сессию в сервисе. Приложение играет через общий
-            // ExoPlayer напрямую и не создаёт MediaController, поэтому без addSession
-            // сервис не начал бы отслеживать плеер и не показал бы уведомление.
-            artworkLoader = bitmapLoader
-            mediaSession?.let { addSession(it) }
+            mediaSession = session
+            // Приложение играет через общий ExoPlayer напрямую и не создаёт MediaController, поэтому без
+            // addSession сервис не следил бы за плеером и не показал уведомление.
+            addSession(session)
         } catch (e: Exception) {
-            logger.error("PlayerService", "Error building media session: ${e.message}", e)
+            logger.error("PlayerService", "Не удалось создать медиасессию: ${e.message}", e)
         }
+    }
 
-        // Автопереход на следующую главу, когда экрана (ViewModel) уже нет
-        backgroundAdvancer.attach()
-
-        // Заглушка, чтобы уложиться в лимит startForeground() для startForegroundService().
-        // Как только у плеера появляется медиа, провайдер заменяет её реальным
-        // уведомлением с тем же NOTIFICATION_ID.
-        startPlaceholderForeground()
-
-        // Если ничего не играет и в плеере пусто — не держим сервис с «пустым» уведомлением
-        Handler(Looper.getMainLooper()).postDelayed({
-            val player = mediaSession?.player
-            if (player == null || (player.mediaItemCount == 0 && !player.isPlaying)) stopSelf()
-        }, IDLE_STOP_DELAY_MS)
-
-        // Следим за настройкой: при изменении режим применяется к следующей
-        // перерисовке уведомления (play/pause, смена главы).
-        serviceScope.launch {
-            useSystemMediaPlayer = settingsStore.useSystemMediaPlayer.first()
-        }
-        serviceScope.launch {
-            settingsStore.useSystemMediaPlayer.collect { enabled ->
-                useSystemMediaPlayer = enabled
-            }
+    private fun dropSession() {
+        val session = mediaSession ?: return
+        mediaSession = null
+        try {
+            removeSession(session)
+            session.release()
+        } catch (e: Exception) {
+            logger.warn("PlayerService", "Ошибка при снятии медиасессии", e)
         }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
+    // --- классический режим ----------------------------------------------------------------
+
+    private fun startClassic() {
+        if (classicListener == null) {
+            val l = object : Player.Listener {
+                override fun onEvents(player: Player, events: Player.Events) = postClassic()
+            }
+            classicListener = l
+            holder.player().addListener(l)
+        }
+        // Media3 при снятии сессии убирает своё уведомление (тот же id) — рисуем свежее чуть позже
+        handler.postDelayed({ postClassic() }, 300)
+    }
+
+    private fun stopClassic() {
+        classicListener?.let { holder.player().removeListener(it) }
+        classicListener = null
+    }
+
+    private fun postClassic() {
+        if (systemMode) return
+        val player = holder.player()
+        if (player.mediaItemCount == 0) return
+        val notification = buildClassicNotification(player)
+        val playing = player.playWhenReady &&
+            player.playbackState != Player.STATE_IDLE && player.playbackState != Player.STATE_ENDED
+        if (playing) {
+            startForegroundCompat(notification)
+        } else {
+            // На паузе уведомление можно смахнуть, но управление остаётся
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
+            stopForeground(STOP_FOREGROUND_DETACH)
+        }
+    }
+
+    private fun serviceAction(action: String, code: Int): PendingIntent = PendingIntent.getService(
+        this, code, Intent(this, PlayerService::class.java).setAction(action),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    private fun buildClassicNotification(player: Player): android.app.Notification {
+        val isPlaying = player.playWhenReady &&
+            player.playbackState != Player.STATE_IDLE && player.playbackState != Player.STATE_ENDED
+        val metadata: MediaMetadata? = player.currentMediaItem?.mediaMetadata
+        val baseTitle = metadata?.title?.toString()
+        val speed = player.playbackParameters.speed
+        val title = when {
+            baseTitle == null -> "XAuPlayer"
+            speed != 1.0f -> "$baseTitle (${"%.2f".format(speed)}x)"
+            else -> baseTitle
+        }
+        val text = metadata?.artist?.toString() ?: if (isPlaying) "Воспроизведение" else "Пауза"
+
+        val builder = NotificationCompat.Builder(this, channelId)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(openAppIntent())
+            .setOngoing(isPlaying)
+            .setOnlyAlertOnce(true)
+            .setSound(null)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(android.R.drawable.ic_media_previous, "Предыдущая глава", serviceAction(ACTION_PREVIOUS, 1))
+            .addAction(android.R.drawable.ic_media_rew, "Назад", serviceAction(ACTION_REWIND, 2))
+            .addAction(
+                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                if (isPlaying) "Пауза" else "Воспроизвести",
+                serviceAction(ACTION_PLAY_PAUSE, 3)
+            )
+            .addAction(android.R.drawable.ic_media_ff, "Вперёд", serviceAction(ACTION_FORWARD, 4))
+            .addAction(android.R.drawable.ic_media_next, "Следующая глава", serviceAction(ACTION_NEXT, 5))
+            .setStyle(androidx.media.app.NotificationCompat.MediaStyle().setShowActionsInCompactView(0, 2, 4))
+
+        // Обложка: если уже загружена — ставим, иначе грузим и обновляем уведомление
+        val artworkUri = metadata?.artworkUri
+        if (artworkUri != null) {
+            if (artworkUri == artworkUriLoaded) {
+                builder.setLargeIcon(artworkBitmap)
+            } else if (artworkUri != artworkUriLoading) {
+                artworkUriLoading = artworkUri
+                Futures.addCallback(
+                    artworkLoader.loadBitmap(artworkUri),
+                    object : FutureCallback<android.graphics.Bitmap> {
+                        override fun onSuccess(result: android.graphics.Bitmap?) {
+                            artworkBitmap = result
+                            artworkUriLoaded = artworkUri
+                            artworkUriLoading = null
+                            postClassic()
+                        }
+
+                        override fun onFailure(t: Throwable) {
+                            artworkUriLoading = null
+                            logger.warn("PlayerService", "Не удалось загрузить обложку для уведомления: $artworkUri", t)
+                        }
+                    },
+                    androidx.core.content.ContextCompat.getMainExecutor(this)
+                )
+            }
+        }
+        return builder.build()
+    }
+
+    /** Кнопки классического уведомления и гарнитуры приходят сюда интентами. */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_PLAY_PAUSE -> togglePlayPause()
+            ACTION_NEXT -> navPlayer.seekToNext()
+            ACTION_PREVIOUS -> navPlayer.seekToPrevious()
+            ACTION_REWIND -> navPlayer.seekBack()
+            ACTION_FORWARD -> navPlayer.seekForward()
+            Intent.ACTION_MEDIA_BUTTON -> if (!systemMode) handleMediaButton(intent)
+        }
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    private fun togglePlayPause() {
+        val p = holder.player()
+        if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) p.pause() else p.play()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun handleMediaButton(intent: Intent) {
+        val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return
+        if (event.action != KeyEvent.ACTION_DOWN) return
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK -> togglePlayPause()
+            KeyEvent.KEYCODE_MEDIA_PLAY -> holder.player().play()
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> holder.player().pause()
+            KeyEvent.KEYCODE_MEDIA_NEXT -> navPlayer.seekToNext()
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> navPlayer.seekToPrevious()
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> navPlayer.seekForward()
+            KeyEvent.KEYCODE_MEDIA_REWIND -> navPlayer.seekBack()
+        }
+    }
+
+    // --- жизненный цикл --------------------------------------------------------------------
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         // Смахнули приложение: если не играет — останавливаем сервис, если играет — продолжаем в фоне
-        val player = mediaSession?.player
-        if (player == null || !player.playWhenReady || player.mediaItemCount == 0) stopSelf()
+        val player = holder.player()
+        if (!player.playWhenReady || player.mediaItemCount == 0) stopSelf()
     }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        stopClassic()
         backgroundAdvancer.detach()
         serviceScope.cancel()
-        mediaSession?.release()
-        mediaSession = null
+        dropSession()
         super.onDestroy()
     }
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(NotificationManager::class.java)
-
-        // Канал системного MediaStyle-уведомления: видно на экране блокировки.
-        if (nm.getNotificationChannel(mediaChannelId) == null) {
+        if (nm.getNotificationChannel(channelId) == null) {
             nm.createNotificationChannel(
-                NotificationChannel(
-                    mediaChannelId,
-                    "Воспроизведение аудио",
-                    NotificationManager.IMPORTANCE_LOW
-                ).apply {
+                NotificationChannel(channelId, "Воспроизведение аудио", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "Уведомления о воспроизведении аудио"
                     setShowBadge(false)
                     enableLights(false)
@@ -189,7 +353,7 @@ class PlayerService : MediaSessionService() {
     }
 
     private fun startPlaceholderForeground() {
-        val notification = NotificationCompat.Builder(this, mediaChannelId)
+        val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("XAuPlayer")
             .setContentText("Готово к воспроизведению")
             .setSmallIcon(android.R.drawable.ic_media_play)
@@ -200,12 +364,13 @@ class PlayerService : MediaSessionService() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
+        startForegroundCompat(notification)
+    }
 
+    private fun startForegroundCompat(notification: android.app.Notification) {
         if (Build.VERSION.SDK_INT >= 34) {
             ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification,
+                this, NOTIFICATION_ID, notification,
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
             )
         } else {
@@ -214,157 +379,24 @@ class PlayerService : MediaSessionService() {
     }
 
     private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
-        this,
-        0,
-        Intent(this, MainActivity::class.java),
+        this, 0, Intent(this, MainActivity::class.java),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 
-    /**
-     * Единый провайдер, который в зависимости от настройки отдаёт либо системное
-     * MediaStyle-уведомление, либо простое обычное уведомление.
-     */
-    private inner class AdaptiveNotificationProvider : MediaNotification.Provider {
+    // --- сессия (системный режим) -----------------------------------------------------------
 
-        private val systemProvider: DefaultMediaNotificationProvider =
-            DefaultMediaNotificationProvider.Builder(this@PlayerService)
-                .setChannelId(mediaChannelId)
-                .setNotificationId(NOTIFICATION_ID)
-                .build()
-                .apply { setSmallIcon(android.R.drawable.ic_media_play) }
-
-        override fun createNotification(
-            mediaSession: MediaSession,
-            customLayout: ImmutableList<androidx.media3.session.CommandButton>,
-            actionFactory: MediaNotification.ActionFactory,
-            onNotificationChangedCallback: MediaNotification.Provider.Callback
-        ): MediaNotification {
-            return if (useSystemMediaPlayer) {
-                systemProvider.createNotification(
-                    mediaSession,
-                    customLayout,
-                    actionFactory,
-                    onNotificationChangedCallback
-                )
-            } else {
-                createClassicNotification(mediaSession, actionFactory, onNotificationChangedCallback)
-            }
-        }
-
-        override fun handleCustomCommand(
-            session: MediaSession,
-            action: String,
-            extras: android.os.Bundle
-        ): Boolean = systemProvider.handleCustomCommand(session, action, extras)
-    }
-
-    /**
-     * Классическое уведомление «как у ExoPlayer» (режим «не системный»): MediaStyle с кнопками
-     * предыдущая / назад / play-pause / вперёд / следующая, обложкой и скоростью в заголовке.
-     * Не привязано к токену медиасессии, поэтому не попадает в системную карточку «сейчас играет»
-     * и не даёт управление с экрана блокировки через системный плеер.
-     */
-    private fun createClassicNotification(
-        mediaSession: MediaSession,
-        actionFactory: MediaNotification.ActionFactory,
-        callback: MediaNotification.Provider.Callback
-    ): MediaNotification {
-        val player = mediaSession.player
-        val isPlaying = player.playWhenReady &&
-            player.playbackState != Player.STATE_IDLE &&
-            player.playbackState != Player.STATE_ENDED
-        val metadata = player.currentMediaItem?.mediaMetadata
-
-        val baseTitle = metadata?.title?.toString()
-        val speed = player.playbackParameters.speed
-        val title = when {
-            baseTitle == null -> "XAuPlayer"
-            speed != 1.0f -> "$baseTitle (${"%.2f".format(speed)}x)"
-            else -> baseTitle
-        }
-        val text = metadata?.artist?.toString() ?: if (isPlaying) "Воспроизведение" else "Пауза"
-
-        fun action(icon: Int, label: String, command: Int) = actionFactory.createMediaAction(
-            mediaSession, IconCompat.createWithResource(this, icon), label, command
-        )
-
-        val builder = NotificationCompat.Builder(this, mediaChannelId)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentIntent(openAppIntent())
-            .setOngoing(isPlaying)
-            .setOnlyAlertOnce(true)
-            .setSound(null)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(action(android.R.drawable.ic_media_previous, "Предыдущая глава", Player.COMMAND_SEEK_TO_PREVIOUS))
-            .addAction(action(android.R.drawable.ic_media_rew, "Назад", Player.COMMAND_SEEK_BACK))
-            .addAction(
-                action(
-                    if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-                    if (isPlaying) "Пауза" else "Воспроизвести",
-                    Player.COMMAND_PLAY_PAUSE
-                )
-            )
-            .addAction(action(android.R.drawable.ic_media_ff, "Вперёд", Player.COMMAND_SEEK_FORWARD))
-            .addAction(action(android.R.drawable.ic_media_next, "Следующая глава", Player.COMMAND_SEEK_TO_NEXT))
-            .setStyle(
-                androidx.media.app.NotificationCompat.MediaStyle()
-                    .setShowActionsInCompactView(0, 2, 4)
-            )
-
-        // Обложка: если уже загружена — ставим, иначе грузим и обновляем уведомление
-        val artworkUri = metadata?.artworkUri
-        if (artworkUri != null) {
-            if (artworkUri == artworkUriLoaded) {
-                builder.setLargeIcon(artworkBitmap)
-            } else if (artworkUri != artworkUriLoading) {
-                artworkUriLoading = artworkUri
-                val loader = artworkLoader
-                if (loader != null) {
-                    Futures.addCallback(
-                        loader.loadBitmap(artworkUri),
-                        object : com.google.common.util.concurrent.FutureCallback<android.graphics.Bitmap> {
-                            override fun onSuccess(result: android.graphics.Bitmap?) {
-                                artworkBitmap = result
-                                artworkUriLoaded = artworkUri
-                                artworkUriLoading = null
-                                if (!useSystemMediaPlayer) {
-                                    callback.onNotificationChanged(createClassicNotification(mediaSession, actionFactory, callback))
-                                }
-                            }
-
-                            override fun onFailure(t: Throwable) {
-                                artworkUriLoading = null
-                                logger.warn("PlayerService", "Не удалось загрузить обложку для уведомления: $artworkUri", t)
-                            }
-                        },
-                        androidx.core.content.ContextCompat.getMainExecutor(this)
-                    )
-                }
-            }
-        }
-
-        return MediaNotification(NOTIFICATION_ID, builder.build())
-    }
-
-    /**
-     * Callback сессии: выдаёт контроллерам право на кастомную команду перемотки
-     * вперёд и обрабатывает её нажатие из системного уведомления.
-     */
+    /** Команды перемотки для системного уведомления (в custom layout — только кастомные SessionCommand). */
     private inner class MediaSessionCallback : MediaSession.Callback {
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo
         ): MediaSession.ConnectionResult {
-            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
-                .buildUpon()
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(SessionCommand(ACTION_SEEK_FORWARD, Bundle.EMPTY))
                 .add(SessionCommand(ACTION_SEEK_BACK, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(sessionCommands)
+                .setAvailableSessionCommands(commands)
                 .build()
         }
 
@@ -389,11 +421,10 @@ class PlayerService : MediaSessionService() {
     }
 
     /**
-     * Обёртка над общим плеером: даёт системным контролам «следующая/предыдущая глава» через
-     * [ChapterNavigation] (его выставляет PlayerViewModel). Остальное уходит в ExoPlayer без изменений.
+     * Обёртка над общим плеером: даёт «следующая/предыдущая глава» через [ChapterNavigation]
+     * (экран жив — PlayerViewModel, иначе BackgroundAdvancer). Остальное уходит в ExoPlayer без изменений.
      */
     private inner class ChapterNavigationPlayer(player: Player) : ForwardingPlayer(player) {
-        // Экран жив — навигирует он; иначе кнопки обслуживает BackgroundAdvancer (по mediaId из БД)
         private val nav: ChapterNavigation? get() = holder.chapterNavigation ?: backgroundAdvancer.fallbackNavigation
 
         override fun getAvailableCommands(): Player.Commands {
@@ -422,8 +453,13 @@ class PlayerService : MediaSessionService() {
 
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val IDLE_STOP_DELAY_MS = 8000L
         private const val ACTION_SEEK_FORWARD = "ru.fire_core.xauplayer.SEEK_FORWARD"
         private const val ACTION_SEEK_BACK = "ru.fire_core.xauplayer.SEEK_BACK"
-        private const val IDLE_STOP_DELAY_MS = 8000L
+        private const val ACTION_PLAY_PAUSE = "ru.fire_core.xauplayer.PLAY_PAUSE"
+        private const val ACTION_NEXT = "ru.fire_core.xauplayer.NEXT"
+        private const val ACTION_PREVIOUS = "ru.fire_core.xauplayer.PREVIOUS"
+        private const val ACTION_REWIND = "ru.fire_core.xauplayer.REWIND"
+        private const val ACTION_FORWARD = "ru.fire_core.xauplayer.FORWARD"
     }
 }
